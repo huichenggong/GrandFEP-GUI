@@ -38,6 +38,47 @@ class MyTestCase(unittest.TestCase):
 
     def test_Rest2TopologyFactory(self):
         print("# Can we construct a proper REST2 system which generate exact same force?")
+        from rdkit import Chem
+        from rdkit.Chem import Lipinski
+        from grandfep.hybrid_topology.hybrid_factory import Rest2TopologyFactory
+
+        sdf_path = base / "schrodinger_sets/water_set/hsp90_woodhead/test/A01/A01.sdf"
+        supplier = Chem.SDMolSupplier(str(sdf_path), removeHs=False)
+        mol = supplier[0]
+        rot_bonds = mol.GetSubstructMatches(Lipinski.RotatableBondSmarts)
+        hot_atoms = list(range(mol.GetNumAtoms()))
+
+        inpcrd, prmtop, system = utils.load_amber_sys(
+            base / "schrodinger_sets/water_set/hsp90_woodhead/test/A01/01_dry.inpcrd",
+            base / "schrodinger_sets/water_set/hsp90_woodhead/test/A01/01_dry.prmtop",
+        )
+
+        factory = Rest2TopologyFactory(system, prmtop.topology, hot_atoms, rot_bonds)
+
+        # Particle and constraint counts match
+        self.assertEqual(factory.system.getNumParticles(), system.getNumParticles())
+        self.assertEqual(factory.system.getNumConstraints(), system.getNumConstraints())
+
+        # Energy identity at k_rest2_sqrt = 1.0
+        platform = openmm.Platform.getPlatformByName("Reference")
+        ctx_orig  = openmm.Context(system,         openmm.VerletIntegrator(0.001), platform)
+        ctx_rest2 = openmm.Context(factory.system, openmm.VerletIntegrator(0.001), platform)
+        ctx_orig.setPositions(inpcrd.positions)
+        ctx_rest2.setPositions(inpcrd.positions)
+        E_orig  = ctx_orig.getState(getEnergy=True).getPotentialEnergy()
+        E_rest2 = ctx_rest2.getState(getEnergy=True).getPotentialEnergy()
+        self.assertAlmostEqual(
+            E_orig.value_in_unit(unit.kilojoule_per_mole),
+            E_rest2.value_in_unit(unit.kilojoule_per_mole),
+            delta=0.1,
+        )
+
+        # Setting k_rest2_sqrt != 1 changes energy
+        ctx_rest2.setParameter("k_rest2_sqrt", 0.5)
+        E_scaled = ctx_rest2.getState(getEnergy=True).getPotentialEnergy()
+        self.assertGreater(
+            abs((E_orig - E_scaled).value_in_unit(unit.kilojoule_per_mole)), 1.0
+        )
 
 
 
