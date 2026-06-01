@@ -73,8 +73,9 @@ class MyTestCase(unittest.TestCase):
             delta=0.1,
         )
 
-        # Setting k_rest2_sqrt != 1 changes energy
+        # Setting k_rest2_sqrt != 1 changes energy (keep k_rest2 = k_rest2_sqrt^2)
         ctx_rest2.setParameter("k_rest2_sqrt", 0.5)
+        ctx_rest2.setParameter("k_rest2", 0.25)
         E_scaled = ctx_rest2.getState(getEnergy=True).getPotentialEnergy()
         self.assertGreater(
             abs((E_orig - E_scaled).value_in_unit(unit.kilojoule_per_mole)), 1.0

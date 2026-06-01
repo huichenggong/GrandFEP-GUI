@@ -4,8 +4,13 @@ from grandfep import hybrid_topology
 # Normal REST2
 class Rest2TopologyFactory:
     """
-    This class generate a topology for REST2 simulation, set global parameter k_rest2_sqrt to control
-    the scaling. k_rest2 = k_rest2_sqrt^2 is implicit via the expression exponent.
+    This class generate a topology for REST2 simulation, set 2 global parameters k_rest2 and k_rest2_sqrt to control
+    the scaling. The caller is responsible for keeping k_rest2 = k_rest2_sqrt^2.
+
+    Scaling convention (n_hot = number of hot atoms in a term):
+      n_hot = 2 → scale by k_rest2      (= k_rest2_sqrt^2)
+      n_hot = 1 → scale by k_rest2_sqrt (= sqrt(k_rest2))
+      n_hot = 0 → unscaled
     """
     def __init__(self, system, topology, nb_hot_atoms, rotatable_bonds):
         self.molecule_system = hybrid_topology.MolecularSystem().gen_from_openmm_system(system, topology)
@@ -86,12 +91,11 @@ class Rest2TopologyFactory:
         ms = self.molecule_system
         part = ms.rest2_scalable_dihedrals()
 
-        # ALL torsions go into PeriodicTorsionForce (unscaled baseline).
-        # For hot rotatable-bond torsions, CustomTorsionForce adds the correction
-        # (k^n_hot - 1) * energy so that at k=1 the correction is zero.
+        # PeriodicTorsionForce: all unscaled torsions (cold + non-rotatable + zero-hot rotatable)
+        # CustomTorsionForce:   hot rotatable torsions, fully scaled by k_rest2_sqrt^n_hot
         ptf = openmm.PeriodicTorsionForce()
         ctf = openmm.CustomTorsionForce(
-            "(k_rest2_sqrt^n_hot - 1) * k * (1 + cos(n * theta - phase))"
+            "k_rest2_sqrt^n_hot * k * (1 + cos(n * theta - phase))"
         )
         ctf.addGlobalParameter("k_rest2_sqrt", 1.0)
         ctf.addPerTorsionParameter("n_hot")
@@ -109,139 +113,85 @@ class Rest2TopologyFactory:
 
         for t in part.proper_rest2:
             p = t.potential.parameters
-            ptf.addTorsion(*t.atoms, p["periodicity"], p["phase"], p["k"])
             n_hot = len({t.atoms[1], t.atoms[2]} & self.hot_set)
             if n_hot >= 1:
                 ctf.addTorsion(*t.atoms, [float(n_hot), p["k"], float(p["periodicity"]), p["phase"]])
+            else:
+                ptf.addTorsion(*t.atoms, p["periodicity"], p["phase"], p["k"])
 
         self.system.addForce(ptf)
         self.system.addForce(ctf)
 
     def _prepare_exception(self):
         """
-        Build 4 forces to handle nonbonded interactions with REST2 scaling.
+        Build a single REST2-ready NonbondedForce using addParticleParameterOffset
+        and addExceptionParameterOffset.
 
-        Uses the additive-correction approach so that at k_rest2_sqrt=1 every
-        correction force contributes exactly 0 and total energy matches original:
+        Hot-atom charges and epsilons are stored as base=0 and recovered via
+        parameter offsets, so the NonbondedForce natively scales all interactions
+        — including PME reciprocal space — when k_rest2_sqrt / k_rest2 change.
 
-          A: NonbondedForce         — original, unchanged (handles PME for all atoms)
-          B: CustomNonbondedForce HH — (k^2 - 1) × hot-hot direct space
-          C: CustomNonbondedForce HC — (k   - 1) × hot-cold direct space
-          D: CustomBondForce         — (k^n_hot - 1) × hot-involved 1-4 pairs
+        Scaling applied to each offset parameter:
+          charge:    multiply hot-atom charge    by k_rest2_sqrt  (linear offset)
+          epsilon:   multiply hot-atom epsilon   by k_rest2       (linear offset)
+          Mixed pairs follow from the Lorentz-Berthelot combining rules automatically:
+            hot-hot charge:    k_rest2_sqrt * q_i * k_rest2_sqrt * q_j = k_rest2 * q_i*q_j
+            hot-cold charge:   k_rest2_sqrt * q_i * q_j
+            hot-hot epsilon_ij:  sqrt(k_rest2*eps_i * k_rest2*eps_j) = k_rest2 * sqrt(eps_i*eps_j)
+            hot-cold epsilon_ij: sqrt(k_rest2*eps_i * eps_j)         = k_rest2_sqrt * sqrt(eps_i*eps_j)
 
-        At k=1: B=C=D=0 so total equals original NonbondedForce energy.
-        At k≠1: direct-space hot interactions are scaled; PME reciprocal space
-                is left unscaled (standard REST2 approximation).
+        1-4 exceptions involving hot atoms are handled with addExceptionParameterOffset:
+          n_hot=1: param = k_rest2_sqrt
+          n_hot=2: param = k_rest2
         """
         if self._orig_nb_force is None:
             return
 
         ms = self.molecule_system
         hot_set = self.hot_set
-
-        # Classify exception terms
-        exc_hot_14 = []
-        for term in ms.nonbonded_exceptions:
-            a1, a2 = term.atoms
-            if not term.potential.is_exclusion and (a1 in hot_set or a2 in hot_set):
-                exc_hot_14.append(term)
-
-        # Copy settings from original NonbondedForce
         orig = self._orig_nb_force
-        orig_method   = orig.getNonbondedMethod()
-        cutoff        = orig.getCutoffDistance()
-        use_switch    = orig.getUseSwitchingFunction()
-        switch_dist   = orig.getSwitchingDistance()
 
-        # Map NonbondedForce method → CustomNonbondedForce method
-        NF = openmm.NonbondedForce
-        CNF = openmm.CustomNonbondedForce
-        _map = {NF.NoCutoff: CNF.NoCutoff, NF.CutoffNonPeriodic: CNF.CutoffNonPeriodic}
-        cnb_method = _map.get(orig_method, CNF.CutoffPeriodic)
-
-        # ----------------------------------------------------------------
-        # Force A: copy of original NonbondedForce, completely unchanged
-        # ----------------------------------------------------------------
         nbf = openmm.NonbondedForce()
-        nbf.setNonbondedMethod(orig_method)
-        nbf.setCutoffDistance(cutoff)
+        # Parameters must be declared on the NonbondedForce itself before addParticleParameterOffset
+        nbf.addGlobalParameter("k_rest2_sqrt", 1.0)
+        nbf.addGlobalParameter("k_rest2", 1.0)
+        nbf.setNonbondedMethod(orig.getNonbondedMethod())
+        nbf.setCutoffDistance(orig.getCutoffDistance())
         nbf.setEwaldErrorTolerance(orig.getEwaldErrorTolerance())
-        nbf.setUseSwitchingFunction(use_switch)
-        if use_switch:
-            nbf.setSwitchingDistance(switch_dist)
+        nbf.setUseSwitchingFunction(orig.getUseSwitchingFunction())
+        if orig.getUseSwitchingFunction():
+            nbf.setSwitchingDistance(orig.getSwitchingDistance())
         nbf.setUseDispersionCorrection(orig.getUseDispersionCorrection())
         nbf.setExceptionsUsePeriodicBoundaryConditions(
             orig.getExceptionsUsePeriodicBoundaryConditions()
         )
+
+        # Particles: cold atoms use original params; hot atoms use base=0 + offset
         for idx in sorted(ms.atoms):
-            charge, sigma, epsilon = orig.getParticleParameters(idx)
-            nbf.addParticle(charge, sigma, epsilon)
-        for i in range(orig.getNumExceptions()):
-            a1, a2, chargeProd, sigma, epsilon = orig.getExceptionParameters(i)
-            nbf.addException(a1, a2, chargeProd, sigma, epsilon)
-        self.system.addForce(nbf)
+            atom = ms.atoms[idx]
+            if idx in hot_set:
+                nbf.addParticle(0.0, atom.sigma, 0.0)
+            else:
+                nbf.addParticle(atom.charge, atom.sigma, atom.epsilon)
 
-        # ----------------------------------------------------------------
-        # Helper: build a CustomNonbondedForce with common setup
-        # ----------------------------------------------------------------
-        lj_coulomb = (
-            "4*sqrt(eps1*eps2)*((0.5*(sig1+sig2)/r)^12 - (0.5*(sig1+sig2)/r)^6)"
-            " + 138.935456*q1*q2/r"
-        )
+        for idx in hot_set:
+            atom = ms.atoms[idx]
+            nbf.addParticleParameterOffset("k_rest2_sqrt", idx, atom.charge, 0.0, 0.0)
+            nbf.addParticleParameterOffset("k_rest2",      idx, 0.0, 0.0, atom.epsilon)
 
-        def _make_cnbf(expression):
-            f = openmm.CustomNonbondedForce(expression)
-            f.addGlobalParameter("k_rest2_sqrt", 1.0)
-            f.addPerParticleParameter("q")
-            f.addPerParticleParameter("eps")
-            f.addPerParticleParameter("sig")
-            for idx in sorted(ms.atoms):
-                atom = ms.atoms[idx]
-                f.addParticle([atom.charge, atom.epsilon, atom.sigma])
-            for term in ms.nonbonded_exceptions:
-                f.addExclusion(*term.atoms)
-            f.setNonbondedMethod(cnb_method)
-            if cnb_method != CNF.NoCutoff:
-                f.setCutoffDistance(cutoff)
-            if use_switch:
-                f.setUseSwitchingFunction(True)
-                f.setSwitchingDistance(switch_dist)
-            return f
-
-        # ----------------------------------------------------------------
-        # Force B: CustomNonbondedForce HH — correction for hot-hot pairs
-        # ----------------------------------------------------------------
-        hh_force = _make_cnbf(f"(k_rest2_sqrt^2 - 1) * ({lj_coulomb})")
-        hh_force.addInteractionGroup(set(hot_set), set(hot_set))
-        self.system.addForce(hh_force)
-
-        # ----------------------------------------------------------------
-        # Force C: CustomNonbondedForce HC — correction for hot-cold pairs
-        # ----------------------------------------------------------------
-        cold_set = set(ms.atoms) - set(hot_set)
-        hc_force = _make_cnbf(f"(k_rest2_sqrt - 1) * ({lj_coulomb})")
-        hc_force.addInteractionGroup(set(hot_set), cold_set)
-        self.system.addForce(hc_force)
-
-        # ----------------------------------------------------------------
-        # Force D: CustomBondForce — correction for hot-involved 1-4 pairs
-        # ----------------------------------------------------------------
-        cbf = openmm.CustomBondForce(
-            "(k_rest2_sqrt^n_hot - 1) * (4*eps*((sig/r)^12-(sig/r)^6) + 138.935456*chargeProd/r)"
-        )
-        cbf.addGlobalParameter("k_rest2_sqrt", 1.0)
-        cbf.addPerBondParameter("n_hot")
-        cbf.addPerBondParameter("eps")
-        cbf.addPerBondParameter("sig")
-        cbf.addPerBondParameter("chargeProd")
-
-        for term in exc_hot_14:
+        # Exceptions: exclusions and cold 1-4 are copied as-is; hot 1-4 use offsets
+        for term in ms.nonbonded_exceptions:
             a1, a2 = term.atoms
             p = term.potential
-            n_hot = (1 if a1 in hot_set else 0) + (1 if a2 in hot_set else 0)
-            cbf.addBond(a1, a2, [float(n_hot), p.epsilon, p.sigma, p.chargeProd])
+            if p.is_exclusion or not (a1 in hot_set or a2 in hot_set):
+                nbf.addException(a1, a2, p.chargeProd, p.sigma, p.epsilon)
+            else:
+                exc_idx = nbf.addException(a1, a2, 0.0, p.sigma, 0.0)
+                n_hot = (1 if a1 in hot_set else 0) + (1 if a2 in hot_set else 0)
+                param_name = "k_rest2" if n_hot == 2 else "k_rest2_sqrt"
+                nbf.addExceptionParameterOffset(param_name, exc_idx, p.chargeProd, 0.0, p.epsilon)
 
-        self.system.addForce(cbf)
+        self.system.addForce(nbf)
 
 
 # Hybrid RBFE REST2
