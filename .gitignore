@@ -8,3 +8,4 @@ build/
 
 app/uploads/
 !app/uploads/.gitkeep
+/.idea/*

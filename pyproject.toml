@@ -4,22 +4,30 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "grandfep"
-version = "0.1.0"
+version = "2.0.0"
+description = "GrandFEP: A set of enhanced sampling for FEP"
+authors = [
+    { name = "Chenggong Hui"}
+]
 requires-python = ">=3.10"
 dependencies = [
+    "numpy",
+    "openmm",
+    "rdkit",
+
+]
+
+[project.optional-dependencies]
+chem = ["rdkit"]
+dev = ["pytest",]
+GUI = [
+    "httpx",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "jinja2>=3.1",
     "python-multipart>=0.0.9",
 ]
 
-[project.optional-dependencies]
-chem = ["rdkit>=2023.9"]
-dev = ["pytest", "httpx"]
-
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["grandfep*"]
+where = ["src"]
 
-[tool.pytest.ini_options]
-pythonpath = ["."]
