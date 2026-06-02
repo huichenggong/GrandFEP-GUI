@@ -235,6 +235,7 @@ class MolecularSystem:
         # Atom objects that participate in the first stored bond
         first_bond = mol_sys.bonds[0]
         print(mol_sys.atoms_for_term(first_bond))
+
     """
     def __init__(self):
         self.atoms: dict[int, Atom] = {}
@@ -485,3 +486,9 @@ class MolecularSystem:
         self._next_residue_id = sum(1 for _ in topology.residues())
 
         return self
+
+    def set_rotatable_bonds(self, rotatable_bonds):
+        """
+        Set internal set of rotatable bonds
+        """
+        self.rotatable_bonds = {(min(a, b), max(a, b)) for a, b in rotatable_bonds}

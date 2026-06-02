@@ -11,8 +11,39 @@ class Rest2TopologyFactory:
       n_hot = 2 → scale by k_rest2      (= k_rest2_sqrt^2)
       n_hot = 1 → scale by k_rest2_sqrt (= sqrt(k_rest2))
       n_hot = 0 → unscaled
+
+    Attributes
+    ----------
+    system : openmm.System
+
+    topology : app.topology.Topology
+
+    Examples
+    --------
+    .. code-block:: python
+
+        from grandfep import hybrid_topology, utils
+        from pathlib import Path
+
+        base = Path("tests")
+
+        # find rotatable bonds
+        sdf_path = base / "schrodinger_sets/water_set/hsp90_woodhead/test/A01/A01.sdf"
+        supplier = Chem.SDMolSupplier(str(sdf_path), removeHs=False)
+        mol = supplier[0]
+        rot_bonds = mol.GetSubstructMatches(Lipinski.RotatableBondSmarts)
+        hot_atoms = list(range(mol.GetNumAtoms()))
+
+        # construct new system/topology
+        inpcrd, prmtop, system = utils.load_amber_sys(
+            base / "schrodinger_sets/water_set/hsp90_woodhead/test/A01/01_dry.inpcrd",
+            base / "schrodinger_sets/water_set/hsp90_woodhead/test/A01/01_dry.prmtop",
+        )
+        factory = Rest2TopologyFactory(system, prmtop.topology, hot_atoms, rot_bonds)
+
     """
-    def __init__(self, system, topology, nb_hot_atoms, rotatable_bonds):
+    def __init__(self, system:openmm.System, topology, nb_hot_atoms, rotatable_bonds):
+        self.basic_check(system)
         self.molecule_system = hybrid_topology.MolecularSystem().gen_from_openmm_system(system, topology)
         self.hot_set = frozenset(nb_hot_atoms)
         self.topology = topology
@@ -20,17 +51,13 @@ class Rest2TopologyFactory:
         for idx in self.hot_set:
             self.molecule_system.atoms[idx].is_rest2 = True
 
-        self.molecule_system.rotatable_bonds = {
-            (min(a, b), max(a, b)) for a, b in rotatable_bonds
-        }
+        self.molecule_system.set_rotatable_bonds(rotatable_bonds)
 
         self._orig_nb_force = None
-        self._cm_freq = None
         for force in system.getForces():
             if isinstance(force, openmm.NonbondedForce):
                 self._orig_nb_force = force
-            elif isinstance(force, openmm.CMMotionRemover):
-                self._cm_freq = force.getFrequency()
+
         # self._orig_system reserved for future virtual-site copying (skipped for now)
 
         self.system = openmm.System()
@@ -38,11 +65,53 @@ class Rest2TopologyFactory:
         self._prepare_bond()
         self._prepare_angle()
         self._prepare_dihe()
-        self._prepare_exception()
+        self._prepare_nonbonded_force()
+
+    def basic_check(self, system:openmm.System):
+        """
+        Check if the input system is a proper openmm system that this code can customize.
+
+        The input system should have 4 forces `HarmonicBondForce`, `HarmonicAngleForce`, `PeriodicTorsionForce`,
+        `NonbondedForce`. `CMMotionRemover` will be ignored
+
+        Parameters
+        ----------
+        system:
+            We can't customize Charmm system for now
+
+        Raises
+        ------
+        ValueError
+            If required forces are missing or unsupported force types are present.
+        """
+        required = {
+            openmm.HarmonicBondForce,
+            openmm.HarmonicAngleForce,
+            openmm.PeriodicTorsionForce,
+            openmm.NonbondedForce,
+        }
+        found = set()
+        for force in system.getForces():
+            if isinstance(force, openmm.CMMotionRemover):
+                continue
+            force_type = type(force)
+            if force_type not in required:
+                raise ValueError(
+                    f"Unsupported force type '{force_type.__name__}'. "
+                    "Only AMBER/GAFF systems with HarmonicBondForce, HarmonicAngleForce, "
+                    "PeriodicTorsionForce, and NonbondedForce are supported."
+                )
+            found.add(force_type)
+        missing = required - found
+        if missing:
+            raise ValueError(
+                f"Missing required forces: {sorted(f.__name__ for f in missing)}"
+            )
+
 
     def _prepare_system(self):
         """
-        prepare basic property of system, including: atom, mass, constraint
+        prepare basic property of system, including: atom, mass, constraint, default box, center of mass motion remove
         """
         ms = self.molecule_system
         for idx in sorted(ms.atoms):
@@ -55,14 +124,6 @@ class Rest2TopologyFactory:
         if ms.box_vectors is not None:
             self.system.setDefaultPeriodicBoxVectors(*ms.box_vectors)
 
-        if self._cm_freq is not None:
-            self.system.addForce(openmm.CMMotionRemover(self._cm_freq))
-
-    def _prepare_topology(self):
-        """
-        prepare topology
-        """
-        pass
 
     def _prepare_bond(self):
         """
@@ -86,7 +147,37 @@ class Rest2TopologyFactory:
 
     def _prepare_dihe(self):
         """
-        Scale rotatable bond with hot atoms, 1 hot atom in rotatable scale `k_rest2_sqrt`, 2 hot atoms scale `k_rest2`
+        Build two torsion forces according to REST2 scaling rules.
+
+        Only **proper** dihedrals on **rotatable bonds** are eligible for REST2 scaling
+        (``rest2_scalable_dihedrals()`` returns these as ``proper_rest2``).
+        Improper dihedrals and proper dihedrals on non-rotatable bonds are always unscaled.
+
+        **Routing logic**
+
+        For each term in ``proper_rest2``, ``n_hot`` is the count of hot atoms among the
+        two *central* atoms of the dihedral (``atoms[1]`` and ``atoms[2]``):
+
+        +--------+--------------------------------------------+----------------------------+
+        | n_hot  | Physical meaning                           | Scale factor               |
+        +========+============================================+============================+
+        |   2    | Both central atoms are hot — torsion is    | ``k_rest2_sqrt^2``         |
+        |        | entirely within the hot region             | (= ``k_rest2``)            |
+        +--------+--------------------------------------------+----------------------------+
+        |   1    | One central atom hot, one cold — torsion   | ``k_rest2_sqrt^1``         |
+        |        | crosses the hot/cold boundary              | (= ``sqrt(k_rest2)``)      |
+        +--------+--------------------------------------------+----------------------------+
+        |   0    | Both central atoms cold — no REST2 effect, | 1 (unscaled)               |
+        |        | even if the bond is formally rotatable     |                            |
+        +--------+--------------------------------------------+----------------------------+
+
+        Terms with ``n_hot >= 1`` are added to a ``CustomTorsionForce`` with the expression::
+
+            k_rest2_sqrt^n_hot * k * (1 + cos(n * theta - phase))
+
+        where ``n_hot`` is stored as a per-torsion parameter so a single global parameter
+        ``k_rest2_sqrt`` handles both the n_hot=1 and n_hot=2 cases.
+        Terms with ``n_hot == 0`` fall through to the unscaled ``PeriodicTorsionForce``.
         """
         ms = self.molecule_system
         part = ms.rest2_scalable_dihedrals()
@@ -122,7 +213,7 @@ class Rest2TopologyFactory:
         self.system.addForce(ptf)
         self.system.addForce(ctf)
 
-    def _prepare_exception(self):
+    def _prepare_nonbonded_force(self):
         """
         Build a single REST2-ready NonbondedForce using addParticleParameterOffset
         and addExceptionParameterOffset.
@@ -156,6 +247,7 @@ class Rest2TopologyFactory:
         nbf.addGlobalParameter("k_rest2_sqrt", 1.0)
         nbf.addGlobalParameter("k_rest2", 1.0)
         nbf.setNonbondedMethod(orig.getNonbondedMethod())
+        nbf.setPMEParameters(*orig.getPMEParameters())
         nbf.setCutoffDistance(orig.getCutoffDistance())
         nbf.setEwaldErrorTolerance(orig.getEwaldErrorTolerance())
         nbf.setUseSwitchingFunction(orig.getUseSwitchingFunction())

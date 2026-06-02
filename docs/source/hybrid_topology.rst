@@ -1,5 +1,5 @@
 hybrid\_topology — Molecular System and Interaction Terms
-=====================================================
+=========================================================
 
 .. currentmodule:: grandfep.hybrid_topology
 
@@ -21,12 +21,13 @@ radians, elementary charge, Da).
 .. code-block:: text
 
     MolecularSystem
-    ├── atoms       : dict[int, Atom]       ← keyed by OpenMM particle index
+    ├── atoms       : dict[int, Atom]       ← keyed by 0-based index
     ├── residues    : dict[int, Residue]
     ├── bonds       : BondTable             ← HarmonicBondForce entries
     ├── angles      : AngleTable            ← HarmonicAngleForce entries
-    ├── dihedrals   : DihedralTable         ← PeriodicTorsionForce entries
-    └── constraints_list : list[BondTerm]   ← System constraints (no k)
+    ├── dihedrals            : DihedralTable                ← PeriodicTorsionForce entries
+    ├── nonbonded_exceptions : NonbondedExceptionTable      ← exclusions (1-2/1-3) and 1-4 exceptions
+    └── constraints_list     : list[BondTerm]               ← System constraints (no k)
 
 Bidirectional lookup
 ~~~~~~~~~~~~~~~~~~~~
@@ -143,3 +144,27 @@ Nonbonded exceptions
 
 .. autoclass:: NonbondedExceptionPotential
    :members:
+
+REST2 factory
+-------------
+
+:class:`Rest2TopologyFactory` converts a normal AMBER/GAFF OpenMM system into a
+REST2-ready system by gating hot-atom interactions behind two global parameters
+``k_rest2_sqrt`` and ``k_rest2`` (the caller must keep ``k_rest2 = k_rest2_sqrt^2``).
+Setting ``context.setParameter("k_rest2_sqrt", x)`` simultaneously scales all
+REST2 terms (torsions, nonbonded direct space, and 1-4 exceptions).
+
+REST2 scaling convention:
+
+.. code-block:: text
+
+    n_hot = 2 → scale by k_rest2      (= k_rest2_sqrt^2)   ← both central torsion atoms hot
+    n_hot = 1 → scale by k_rest2_sqrt                       ← one central torsion atom hot
+    n_hot = 0 → unscaled
+
+.. currentmodule:: grandfep.hybrid_topology.hybrid_factory
+
+.. autoclass:: Rest2TopologyFactory
+   :members:
+   :undoc-members:
+   :show-inheritance:
