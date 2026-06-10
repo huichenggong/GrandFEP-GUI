@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "grandfep"
-version = "2.0.0"
+version = "2.0.0_dev"
 description = "GrandFEP: A set of enhanced sampling for FEP"
 authors = [
     { name = "Chenggong Hui"}
