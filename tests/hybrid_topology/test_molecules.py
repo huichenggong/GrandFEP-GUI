@@ -2,83 +2,33 @@ from pathlib import Path
 import unittest
 from typing import List, Tuple
 import copy
+import json
+from collections import namedtuple
 
 import numpy as np
+from mdtraj.core import element
 from rdkit import Chem
 from rdkit.Chem import Lipinski
 
 from openmm import app, unit, openmm
 from grandfep import utils, hybrid_topology
 
+from utils_test import calc_energy_force, match_force, separate_force
+
 
 base = Path(__file__).resolve().parent.parent
 
-def calc_energy_force(system: openmm.System, topology: app.topology.Topology, positions, platform=openmm.Platform.getPlatform('Reference'), global_parameters=None):
-    """
-    Calculate energy and force for the system
-    :param system: openmm.System
-    :param topology: openmm.Topology
-    :param positions: openmm.Vec3
-    :return: energy, force
-    """
-    integrator = openmm.LangevinIntegrator(300 * unit.kelvin, 1.0 / unit.picosecond, 2.0 * unit.femtosecond)
-    simulation = app.Simulation(topology, system, integrator, platform)
-    simulation.context.setPositions(positions)
-    if global_parameters:
-        for key, value in global_parameters.items():
-            if key in simulation.context.getParameters():
-                simulation.context.setParameter(key, value)
-            # else:
-            #     print(f"Global Parameter {key} not found in the system.")
-    state = simulation.context.getState(getEnergy=True, getForces=True)
-    energy = state.getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
-    force = state.getForces(asNumpy=True)
-    return energy, force
+def inference_hybridization_rdkit(mol):
+    element_list = []
+    hyb_list = []
+    out = {}
+    atom_hyb = namedtuple("atom_hyb", "symbol hybridization")
+    for idx, atom in enumerate( mol.GetAtoms()):
+        out[idx] = atom_hyb(atom.GetSymbol(), atom.GetHybridization())
+    return out
 
-def match_force(force1, force2, excluded_list = None):
-    """
-    Check if the force is the same
-    :param force1: state.getForces(asNumpy=True)
-    :param force2: state.getForces(asNumpy=True)
-    :param excluded_list: list of atom index to be excluded in the comparison
-    :return: bool
-    """
-    if not excluded_list:
-        excluded_list = []
-    all_close_flag = True
-    mis_match_list = []
-    n_matched = 0
-    for at_index, (f1, f2) in enumerate(zip(force1, force2)):
-        if at_index in excluded_list:
-            continue
-        at_flag = np.allclose(f1, f2)
-        if not at_flag:
-            all_close_flag = False
-            mis_match_list.append([at_index, f1, f2])
-        else:
-            n_matched += 1
-    print(f"{n_matched} atoms matched.")
-    error_msg = "".join([f"{at}\n    {f1}\n    {f2}\n" for at, f1, f2 in mis_match_list])
-    return all_close_flag, mis_match_list, error_msg
 
-def separate_force(system, force_name: List, ):
-    """
-    Create a new system and only keep certain force
-    """
-    sys_new = openmm.System()
-    # box
-    sys_new.setDefaultPeriodicBoxVectors(*system.getDefaultPeriodicBoxVectors())
-
-    for particle_idx in range(system.getNumParticles()):
-        particle_mass = system.getParticleMass(particle_idx)
-        sys_new.addParticle(particle_mass)
-
-    for f in system.getForces():
-        if f.getName() in force_name:
-            sys_new.addForce(copy.deepcopy(f))
-    return sys_new
-
-class MyTestCase_MolecularSystem_REST2(unittest.TestCase):
+class MyTestCase_MolecularSystem(unittest.TestCase):
     def test_MolecularSystem_gen(self):
 
         # find all the rotatable bond from using rdkit
@@ -110,11 +60,11 @@ class MyTestCase_MolecularSystem_REST2(unittest.TestCase):
         self.assertEqual(len(dihe.improper), 15)
         self.assertEqual(len(dihe.proper_not_rest2), 120)
 
+class MyTestCase_MolecularSystem_REST2(unittest.TestCase):
     def test_Rest2TopologyFactory(self):
         print("# TEST Rest2TopologyFactory")
         from rdkit import Chem
         from rdkit.Chem import Lipinski
-        from grandfep.hybrid_topology.hybrid_factory import Rest2TopologyFactory
 
         sdf_path = base / "schrodinger_sets/water_set/hsp90_woodhead/test/A01/A01.sdf"
         supplier = Chem.SDMolSupplier(str(sdf_path), removeHs=False)
@@ -127,7 +77,7 @@ class MyTestCase_MolecularSystem_REST2(unittest.TestCase):
             base / "schrodinger_sets/water_set/hsp90_woodhead/test/A01/01_dry.prmtop",
         )
 
-        factory = Rest2TopologyFactory(system, prmtop.topology, hot_atoms, rot_bonds)
+        factory = hybrid_topology.Rest2TopologyFactory(system, prmtop.topology, hot_atoms, rot_bonds)
 
         # Particle and constraint counts match
         self.assertEqual(factory.system.getNumParticles(), system.getNumParticles())
@@ -202,7 +152,56 @@ class MyTestCase_MolecularSystem_REST2(unittest.TestCase):
         all_close, _, error_msg = match_force(force_ct_k1, force_ct_k05 * 2)
         self.assertTrue(all_close, msg=f"CustomTorsionForce scaling mismatch at k_rest2=0.5:\n{error_msg}")
 
+    def test_Rest2TopologyFactory_OPC_vsite(self):
+        print("# TEST Rest2TopologyFactory with OPC and virtual site")
+        from rdkit import Chem
+        from rdkit.Chem import Lipinski
 
+        ligand_path = base / "public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/macrocycles/2B8V_lig24and25_alpha05/ligand_preparation"
+        sdf_path = ligand_path / "A01/A01.sdf"
+        supplier = Chem.SDMolSupplier(str(sdf_path), removeHs=False)
+        mol = supplier[0]
+        rot_bonds = mol.GetSubstructMatches(Lipinski.RotatableBondSmarts)
+        hot_atoms = list(range(mol.GetNumAtoms())) # set all atoms to hot
+
+        inpcrd, prmtop, system = utils.load_amber_sys(
+            ligand_path / "A01/02_solv.inpcrd",
+            ligand_path / "A01/02_solv.prmtop",
+        )
+
+        factory = hybrid_topology.Rest2TopologyFactory(system, prmtop.topology, hot_atoms, rot_bonds)
+        print("## Can we get identical energy and forces?")
+        energy1, force1 = calc_energy_force(system, prmtop.topology, inpcrd.positions)
+        energy2, force2 = calc_energy_force(factory.system, factory.topology, inpcrd.positions)
+        self.assertAlmostEqual(energy1, energy2)
+        match_force(force1, force2)
+
+class MyTestCase_HybridIndexMapping(unittest.TestCase):
+    def test_loading(self):
+        # find all the rotatable bond from using rdkit
+        ligand_path = base / "public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/macrocycles/2B8V_lig24and25_alpha05/"
+        inpcrdA, prmtopA, systemA = utils.load_amber_sys(
+            ligand_path / "ligand_preparation/A01/02_solv.inpcrd",
+            ligand_path / "ligand_preparation/A01/02_solv.prmtop",
+        )
+        topA = prmtopA.topology
+        inpcrdB, prmtopB, systemB = utils.load_amber_sys(
+            ligand_path / "ligand_preparation/A02/02_solv.inpcrd",
+            ligand_path / "ligand_preparation/A02/02_solv.prmtop",
+        )
+        topB = prmtopB.topology
+        with open(ligand_path / "edge_0_1/mapping.json") as f:
+            mapping = json.load(f)
+
+        index_map = hybrid_topology.HybridIndexMapping(topA, topB, {0:mapping})
+        atA_index_list = [at.index for at in topA.atoms()]
+        atB_index_list = [at.index for at in topB.atoms()]
+        self.assertListEqual(atA_index_list, sorted(index_map.map_A_to_hybrid.keys()))
+        self.assertListEqual(atB_index_list, sorted(index_map.map_B_to_hybrid.keys()))
+        self.assertEqual(len(list(topA.bonds())) + 2, len(list(index_map.hybrid_top.bonds())))
+        self.assertEqual(len(list(topB.bonds())) + 1, len(list(index_map.hybrid_top.bonds())))
+        self.assertListEqual(index_map.broken_bonds_A, [(11, 12)])
+        self.assertListEqual(index_map.broken_bonds_B, [])
 
 if __name__ == '__main__':
     unittest.main()

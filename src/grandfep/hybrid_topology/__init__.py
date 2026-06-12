@@ -17,4 +17,4 @@ from .molecules import (
     DihedralPartition,
     MolecularSystem,
 )
-from .hybrid_factory import Rest2TopologyFactory
+from .hybrid_factory import HybridIndexMapping, Rest2TopologyFactory, HybridRest2TopologyFactoryBase

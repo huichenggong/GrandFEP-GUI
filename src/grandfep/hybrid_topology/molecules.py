@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass, field
 from collections import defaultdict
 from typing import Optional, NamedTuple
@@ -159,6 +160,92 @@ class DihedralPartition(NamedTuple):
     improper: list
 
 
+@dataclass
+class VirtualSiteInfo:
+    """Type-independent representation of one OpenMM virtual site.
+
+    Stores the virtual site type and all parameters needed to reconstruct the
+    OpenMM ``VirtualSite`` object, with optional particle-index remapping.
+    The VS atom index is the key in ``MolecularSystem.virtual_sites``; only the
+    *defining* particle indices are stored here.
+
+    Attributes
+    ----------
+    type_name : str
+        One of ``"TwoParticleAverageSite"``, ``"ThreeParticleAverageSite"``,
+        ``"OutOfPlaneSite"``, ``"LocalCoordinatesSite"``.
+    particles : list[int]
+        Indices of the defining particles (not the VS atom itself).
+    weights : list[float]
+        Per-particle weights for ``TwoParticleAverageSite`` and
+        ``ThreeParticleAverageSite``.  Empty for other types.
+    weight12, weight13, weight_cross : float
+        Coefficients for ``OutOfPlaneSite``.  Zero for other types.
+    origin_weights, x_weights, y_weights : list[float]
+        Axis weight vectors for ``LocalCoordinatesSite``.  Empty for others.
+    local_position : tuple[float, float, float]
+        Local-frame position (nm) for ``LocalCoordinatesSite``.
+    """
+    type_name: str
+    particles: list[int]
+    weights: list[float] = field(default_factory=list)
+    weight12: float = 0.0
+    weight13: float = 0.0
+    weight_cross: float = 0.0
+    origin_weights: list[float] = field(default_factory=list)
+    x_weights: list[float] = field(default_factory=list)
+    y_weights: list[float] = field(default_factory=list)
+    local_position: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+    @classmethod
+    def from_openmm(cls, vs: openmm.VirtualSite) -> "VirtualSiteInfo":
+        """Extract parameters from an OpenMM VirtualSite object."""
+        type_name = type(vs).__name__
+        particles = [vs.getParticle(i) for i in range(vs.getNumParticles())]
+        if type_name in ("TwoParticleAverageSite", "ThreeParticleAverageSite"):
+            weights = [vs.getWeight(i) for i in range(vs.getNumParticles())]
+            return cls(type_name=type_name, particles=particles, weights=weights)
+        if type_name == "OutOfPlaneSite":
+            return cls(type_name=type_name, particles=particles,
+                       weight12=vs.getWeight12(), weight13=vs.getWeight13(),
+                       weight_cross=vs.getWeightCross())
+        if type_name == "LocalCoordinatesSite":
+            lp = vs.getLocalPosition()
+            return cls(type_name=type_name, particles=particles,
+                       origin_weights=list(vs.getOriginWeights()),
+                       x_weights=list(vs.getXWeights()),
+                       y_weights=list(vs.getYWeights()),
+                       local_position=(lp.x, lp.y, lp.z))
+        raise ValueError(f"Unsupported VirtualSite type: {type_name}")
+
+    def to_openmm(self, index_map: dict | None = None) -> openmm.VirtualSite:
+        """Construct an OpenMM VirtualSite, optionally remapping particle indices.
+
+        Parameters
+        ----------
+        index_map : dict[int, int] | None
+            If given, each particle index ``p`` is replaced by
+            ``index_map[p]`` before constructing the object.  Pass ``None``
+            to use the stored indices unchanged.
+        """
+        p = [index_map[i] for i in self.particles] if index_map else list(self.particles)
+        if self.type_name == "ThreeParticleAverageSite":
+            return openmm.ThreeParticleAverageSite(
+                p[0], p[1], p[2],
+                self.weights[0], self.weights[1], self.weights[2])
+        if self.type_name == "TwoParticleAverageSite":
+            return openmm.TwoParticleAverageSite(p[0], p[1],
+                                                  self.weights[0], self.weights[1])
+        if self.type_name == "OutOfPlaneSite":
+            return openmm.OutOfPlaneSite(p[0], p[1], p[2],
+                                         self.weight12, self.weight13, self.weight_cross)
+        if self.type_name == "LocalCoordinatesSite":
+            return openmm.LocalCoordinatesSite(
+                p, self.origin_weights, self.x_weights, self.y_weights,
+                openmm.Vec3(*self.local_position))
+        raise ValueError(f"Unsupported VirtualSite type: {self.type_name}")
+
+
 class MolecularSystem:
     """Flat, ID-keyed store of atoms and bonded interactions for one simulation system.
 
@@ -212,6 +299,12 @@ class MolecularSystem:
         Bond-length constraints (from ``System.getConstraintParameters``).
         Kept separate from ``bonds`` because they carry no force constant
         and require different treatment when building a hybrid topology.
+    virtual_sites : dict[int, VirtualSiteInfo]
+        Map from atom index to a :class:`VirtualSiteInfo` for every atom that
+        is a virtual site (``system.isVirtualSite(idx)`` is ``True``).  Empty
+        for systems without virtual sites.  Call
+        ``virtual_sites[idx].to_openmm(index_map)`` to reconstruct the OpenMM
+        object, optionally remapping particle indices for a derived system.
 
     Examples
     --------
@@ -249,6 +342,7 @@ class MolecularSystem:
         self.nonbonded_exceptions = NonbondedExceptionTable()
         self.constraints_list = []
         self.box_vectors: tuple | list | None = None
+        self.virtual_sites: dict[int, VirtualSiteInfo] = {}
 
         self._next_atom_id = 0
         self._next_residue_id = 0
@@ -325,6 +419,7 @@ class MolecularSystem:
             improper=list(self.improper_dihedrals),
         )
 
+
     def gen_from_openmm_system(self, system: openmm.System, topology: app.topology.Topology):
         """Populate this MolecularSystem from an OpenMM System and Topology.
 
@@ -393,6 +488,8 @@ class MolecularSystem:
             )
             self.atoms[idx] = a
             self.residues[atom.residue.index].atom_ids.append(idx)
+            if is_vs:
+                self.virtual_sites[idx] = VirtualSiteInfo.from_openmm(system.getVirtualSite(idx))
 
         # --- Nonbonded exceptions / exclusions ---
         if nb_force is not None:

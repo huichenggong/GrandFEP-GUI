@@ -9,3 +9,4 @@ build/
 app/uploads/
 !app/uploads/.gitkeep
 /.idea/*
+/tests/public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/waterset/throm_nozob_hip75/*

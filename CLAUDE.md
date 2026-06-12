@@ -44,4 +44,68 @@ Each step maps to a `grandfep/setup/` module and a `app/routers/` endpoint:
 - **True Dummy atoms**: dummy atoms must be seperable in the partition function with no redundent bonded terms
 - **Core Hopping**: scaffold hopping transformations require atom mapping that crosses ring systems; the mapping code must handle cases where no single MCS covers the full perturbation
 
+## Nonbonded Force
 
+### vdw
+For the vdw interaction, we set a **NonbondedForce** and a **CustomNonbondedForce**. All of the interactions that need soft-core goes to 
+**CustomNonbondedForce**.  
+
+Global parameters: 
+- **k_rest2**      :  
+- **k_rest2_sqrt** :
+- **lambda_vdw_core_A**
+- **lambda_vdw_core_B**
+- **lambda_vdw_unique_A**
+- **lambda_vdw_unique_B**
+
+
+|          | core     | unique_A | unique_B | swap     | env      |
+|----------|----------|----------|----------|----------|----------|
+| core     |  N       |          |          |          |          |
+| unique_A |  Cust    |  Cust    |          |          |          |
+| unique_B |  Cust    |          |  Cust    |          |          |
+| swap     |  Cust    |  Cust    |  Cust    |  Cust    |          |
+| env      |  N       |  Cust    |  Cust    |  Cust    |  N       |
+
+- **core**     : These atoms are changing in state A and B  
+- **unique_A** : These atoms only appears in state A and they are dummy in state B  
+- **unique_B** : These atoms only appears in state B and they are dummy in state A  
+- **swap**     : 2 water molecules for water-swap Monte Carlo  
+- **env**      : Other atoms, they have the same vdw in state A and B. they can be scaled by REST2  
+
+0/1 encoding of the atom identity. PerParticleParameter
+is_core  
+is_unique_A  
+is_unique_B  
+is_swap  
+is_hot
+
+### Coulomb
+All the Coulomb is in NonbondedForce. 
+
+Global parameters: 
+- **k_rest2**      :  
+- **k_rest2_sqrt** : 
+- **lambda_coulomb_unique_A** :
+- **lambda_coulomb_unique_A_k_rest2_sqrt** :
+- **lambda_coulomb_unique_B**   :
+- **lambda_coulomb_unique_B_x_k_rest2_sqrt** :
+- **lambda_coulomb_core_A**                  :
+- **lambda_coulomb_core_A_x_k_rest2_sqrt**   :
+- **lambda_coulomb_core_B**                  :
+- **lambda_coulomb_core_B_x_k_rest2_sqrt**   :
+- **lambda_coulomb_swap1**                   :
+- **lambda_coulomb_swap2**                   :
+
+|           | is_hot | ParticleParameterOffset 1            | ParticleParameterOffset 2            |
+|-----------|--------|--------------------------------------|--------------------------------------|
+| core      | Y      | lambda_coulomb_core_A_x_k_rest2_sqrt | lambda_coulomb_core_B_x_k_rest2_sqrt |
+| core      |        | lambda_coulomb_core_A                | lambda_coulomb_core_B                |
+| unique_A  | Y      | lambda_coulomb_unique_A_k_rest2_sqrt |                                      | 
+| unique_A  |        | lambda_coulomb_unique_A              |                                      |
+| unique_B  | Y      | lambda_coulomb_unique_B_k_rest2_sqrt |                                      |
+| unique_B  |        | lambda_coulomb_unique_B              |                                      |
+| swap1     |        | lambda_coulomb_swap1                 |                                      |
+| swap2     |        | lambda_coulomb_swap2                 |                                      |
+| else      | Y      | k_rest2_sqrt (Coulomb)               | k_rest2 (vdw)                        |
+| else      |        |                                      |                                      |

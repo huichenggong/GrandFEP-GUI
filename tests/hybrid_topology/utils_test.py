@@ -23,7 +23,7 @@ def calc_energy_force(system: openmm.System, topology: app.topology.Topology, po
             #     print(f"Global Parameter {key} not found in the system.")
     state = simulation.context.getState(getEnergy=True, getForces=True)
     energy = state.getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
-    force = state.getForces(asNumpy=True)
+    force = state.getForces(asNumpy=True).value_in_unit(unit.kilojoule_per_mole / unit.nanometer)
     return energy, force
 
 def match_force(force1, force2, excluded_list = None):
