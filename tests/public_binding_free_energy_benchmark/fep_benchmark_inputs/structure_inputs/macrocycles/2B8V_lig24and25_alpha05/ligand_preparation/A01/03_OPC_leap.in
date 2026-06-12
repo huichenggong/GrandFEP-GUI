@@ -1,0 +1,17 @@
+source leaprc.water.opc
+source leaprc.gaff2
+
+MOL = loadmol2 ../00_A01_centered.mol2
+loadamberparams A01.frcmod
+
+water = loadpdb ../02_water.pdb
+SYS = combine { MOL water }
+
+setBOX SYS vdw
+
+addIonsRand SYS Na+ 4 Cl- 4
+
+savepdb       SYS 03_solv.pdb
+saveamberparm SYS 03_solv.prmtop 03_solv.inpcrd
+
+quit
