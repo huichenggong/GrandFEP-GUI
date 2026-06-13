@@ -38,7 +38,7 @@ def _detect_edge_dir() -> Path:
     # argv[0] is the script itself when pymol passes it through
     for candidate in reversed(script_stripped):
         p = Path(candidate)
-        if p.is_dir() and (p / "mapping.json").exists():
+        if p.is_dir() and (p / "mapping_constraint_checked.json").exists():
             return p
     return Path.cwd()
 
@@ -57,7 +57,7 @@ def view_edge(edge_dir: str | Path | None = None):
 
     mol_a_path   = edge_dir / "mol_a.sdf"
     mol_b_path   = edge_dir / "mol_b.sdf"
-    mapping_path = edge_dir / "mapping.json"
+    mapping_path = edge_dir / "mapping_constraint_checked.json"
 
     for p in (mol_a_path, mol_b_path, mapping_path):
         if not p.exists():

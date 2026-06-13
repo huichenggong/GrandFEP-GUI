@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 currently the development uses the mamba env called `gfep_gui_dev`
 
-## Current development focuse
+## Current development focus
 `src/grandfep/hybrid_topology`
 
 ## Project Overview
@@ -14,35 +14,119 @@ GrandFEP-GUI is a reconstruction of the [GrandFEP](https://github.com/deGrootLab
 ## Architecture
 
 **`src/grandfep/`** — installable Python library, no GUI dependencies:
-- `src/grandfep/samplers/` — FEP sampler classes (`WaterSwapSamplerMPI`, `BasicSampler`) and sampler utilities
-- `src/grandfep/utils/` — hybrid system factory (`relative_REST2_factory`), MD parameters (`md_parameters`)
-- `src/grandfep/interaction_table` - topology classes (`Atom`, `Residue`, ...)
+- `src/grandfep/hybrid_topology/` — **active development**. Core data model (`molecules.py`: `Atom`, `Residue`, `BondPotential`, `AnglePotential`, `DihedralPotential`, `NonbondedExceptionPotential`, `VirtualSiteInfo`, `MolecularSystem`, and `TermTable` subclasses) and topology factory classes (`hybrid_factory.py`: `Rest2TopologyFactory`, `HybridIndexMapping`, `HybridRest2TopologyFactoryBase`).
+- `src/grandfep/utils/` — I/O utilities (`io.py`: `load_amber_sys` for loading AMBER inpcrd/prmtop files).
+- `src/grandfep/samplers/` — placeholder for FEP sampler classes (not yet implemented).
 
-
-### GUI tech stack
-
-- **Backend**: FastAPI with REST endpoints
-- **Molecule rendering**: RDKit server-side SVG (2D depictions with atom coordinates sent to browser)
-- **Atom mapping canvas**: SVG + vanilla JS overlay for click-to-pair interaction on server-rendered SVGs
-- **3D viewer**: NGL.js (CDN) for protein/ligand/trajectory visualization — handles large GPCR systems and supports XTC/DCD trajectory formats needed for FEP analysis
-- **Frontend**: htmx + Alpine.js (no npm/build pipeline)
+**`app/`** — planned GUI layer (not yet implemented):
+- Backend: FastAPI with REST endpoints
+- Frontend: htmx + Alpine.js (no npm/build pipeline)
+- Molecule rendering: RDKit server-side SVG
+- 3D viewer: NGL.js (CDN) for protein/ligand/trajectory visualization
 
 ## FEP Workflow (6 steps)
 
-Each step maps to a `grandfep/setup/` module and a `app/routers/` endpoint:
+The GUI layer (`app/`) and setup modules (`grandfep/setup/`) are not yet implemented. Current development focuses on step 5 (hybrid system construction).
 
-1. **Protein Preparation** — load PDB → check/add missing residues/side chains → cap termini → assign protonation states → check disulfide bonds → validate `openmm.Topology` + `openmm.System`
-2. **Ligand Preparation** — load SDF(s) with pre-assigned protonation states and explicit H → parameterize via antechamber, OpenFF, or MATCH → create small molecule class
-3. **Ligand Mapping** — build perturbation network linking all ligands; user can manually adjust the network graph
-4. **Atom Mapping** — MCS-based auto-mapping per ligand pair → user reviews/corrects via GUI (click-to-pair on 2D SVGs); exports atom index mapping for perturbation
-5. **FEP with Enhanced Sampling** — hybrid system construction (`relative_REST2_factory`) + sampler execution; jobs submitted to cluster (scheduler integration TBD)
-6. **Analysis** — free energy estimate extraction and visualization
+1. **Protein Preparation** (planned) — load PDB → check/add missing residues/side chains → cap termini → assign protonation states → check disulfide bonds → validate `openmm.Topology` + `openmm.System`
+2. **Ligand Preparation** (planned) — load SDF(s) with pre-assigned protonation states and explicit H → parameterize via antechamber, OpenFF, or MATCH → create small molecule class
+3. **Ligand Mapping** (planned) — build perturbation network linking all ligands; user can manually adjust the network graph
+4. **Atom Mapping** (planned) — MCS-based auto-mapping per ligand pair → user reviews/corrects via GUI (click-to-pair on 2D SVGs); exports atom index mapping for perturbation
+5. **FEP with Enhanced Sampling** — hybrid system construction via `HybridRest2TopologyFactoryBase` + sampler execution; jobs submitted to cluster (scheduler integration TBD)
+6. **Analysis** (planned) — free energy estimate extraction and visualization
 
 ## Key Domain Concepts
 
 - **Enhanced sampling here means water-swap + REST2 + ion-swap**: exchanging water/ion positions in the binding site, important for GPCRs (Ion Swap feature)
-- **True Dummy atoms**: dummy atoms must be seperable in the partition function with no redundent bonded terms
+- **True Dummy atoms**: dummy atoms must be separable in the partition function with no redundant bonded terms
 - **Core Hopping**: scaffold hopping transformations require atom mapping that crosses ring systems; the mapping code must handle cases where no single MCS covers the full perturbation
+
+## Key Classes (hybrid_topology)
+
+### `MolecularSystem` (`molecules.py`)
+Flat, ID-keyed data model for one simulation system. Provides fast bidirectional lookups between atoms and their bonded terms. Built from an OpenMM `System` + `Topology` via `gen_from_openmm_system()`.
+
+**Atom identities** (five-way classification for hybrid topologies):
+- **core** — atoms present in both A and B whose parameters change during the alchemical transformation
+- **unique_A** — atoms only in state A (dummy in state B)
+- **unique_B** — atoms only in state B (dummy in state A)
+- **swap** — water molecules for water-swap Monte Carlo
+- **env** — environment atoms, identical in both states (can be scaled by REST2)
+
+**Key containers:**
+- `atoms: dict[int, Atom]` — maps particle index → `Atom` dataclass (id, name, element, charge, mass, sigma, epsilon, is_virtual_site, is_rest2, hybridization)
+- `residues: dict[int, Residue]` — maps residue index → `Residue`
+- `bonds: BondTable`, `angles: AngleTable` — harmonic bonded terms
+- `proper_dihedrals: DihedralTable`, `improper_dihedrals: DihedralTable` — torsion terms partitioned by bond-chain connectivity
+- `nonbonded_exceptions: NonbondedExceptionTable` — 1-4 exceptions and 1-2/1-3 exclusions
+- `constraints_list: list[BondTerm]` — bond-length constraints (kept separate from harmonic bonds)
+- `virtual_sites: dict[int, VirtualSiteInfo]` — virtual site atoms
+- `rotatable_bonds: set[tuple[int, int]]` — populated externally (e.g., from RDKit); drives REST2 dihedral scaling via `rest2_scalable_dihedrals()`
+
+All numerical values are in OpenMM native units (nm, kJ/mol, radians, elementary charge, Da).
+
+### `VirtualSiteInfo` (`molecules.py`)
+Type-independent representation of an OpenMM `VirtualSite`. Supports `TwoParticleAverageSite`, `ThreeParticleAverageSite`, `OutOfPlaneSite`, and `LocalCoordinatesSite`. Key methods:
+- `from_openmm(vs)` — extract parameters from an OpenMM `VirtualSite` object
+- `to_openmm(index_map=None)` — reconstruct the OpenMM object, optionally remapping particle indices (used when building hybrid topologies)
+
+### `Rest2TopologyFactory` (`hybrid_factory.py`)
+Generates a topology for **plain REST2** (non-hybrid, single end-state) enhanced sampling. Controlled by two global parameters: `k_rest2` and `k_rest2_sqrt` (caller must keep `k_rest2 = k_rest2_sqrt^2`).
+
+**Scaling convention** (per bonded term, counting hot atoms involved):
+- `n_hot = 2` → scale by `k_rest2_sqrt^2` (= `k_rest2`)
+- `n_hot = 1` → scale by `k_rest2_sqrt`
+- `n_hot = 0` → unscaled
+
+**Force construction:**
+- Bonds and angles: unmodified `HarmonicBondForce` / `HarmonicAngleForce`
+- Dihedrals: unscaled terms go to `PeriodicTorsionForce`; REST2-scaled terms (proper dihedrals on rotatable bonds with `n_hot >= 1`) go to a `CustomTorsionForce` with expression `k_rest2_sqrt^n_hot * k * (1 + cos(n * theta - phase))`
+- Nonbonded: hot-atom charges/epsilons stored as base=0 with `addParticleParameterOffset` / `addExceptionParameterOffset` keyed to `k_rest2_sqrt` and `k_rest2` — this ensures PME reciprocal space is also correctly scaled
+
+### `HybridIndexMapping` (`hybrid_factory.py`)
+Maps atom indices from two end-state topologies (A and B) onto a single hybrid topology. Each residue listed in `index_a2b` is *perturbed*; all others are environment.
+
+**Hybrid atom ordering within a perturbed residue:**
+1. Core atoms (mapped A↔B, ordered by A's local index)
+2. Unique-A atoms (only in A)
+3. Unique-B atoms (only in B)
+
+**Key attributes:**
+- `map_A_to_hybrid`, `map_B_to_hybrid` — global index → hybrid index
+- `map_hybrid_to_A`, `map_hybrid_to_B` — reverse mappings
+- `core_atoms`, `unique_A_atoms`, `unique_B_atoms`, `env_atoms` — disjoint sets covering all hybrid indices
+- `atom_identity: dict[int, str]` — maps each hybrid index to one of `"core"`, `"unique_A"`, `"unique_B"`, `"env"`
+- `broken_bonds_A`, `broken_bonds_B` — bonds present in only one end-state (hybrid-index pairs)
+- `hybrid_top: openmm.app.Topology` — the merged hybrid topology
+
+### `HybridRest2TopologyFactoryBase` (`hybrid_factory.py`)
+Base class for building hybrid REST2 RBFE systems. Takes two end-state systems, positions, rotatable bond sets, and a `HybridIndexMapping`.
+
+**Bond classification** (stored in `hybrid_bond_info` as `BondInfo` named-tuples with fields `at0, at1, length0, k0, length1, k1, group`):
+
+| Group | Force | Description |
+|-------|-------|-------------|
+| `h` | `HarmonicBondForce` | Parameters identical in A and B (unique-*, env-env) |
+| `c_h` | `CustomBondForce` | At least one core atom; length0 and k linearly interpolated via `lambda_bonds` |
+| `c_s` | `CustomBondForce` (soft-core) | Bond present in only one end-state (broken); soft-core potential with `soft_bond_alpha` |
+
+**Soft-core bond expression** (for bonds breaking/forming):
+```
+0.5 * lambda * k * (r - r0)^2 / (1 + soft_bond_alpha * (1 - lambda) * (r - r0)^2)
+```
+
+**Anchor points** (`_prepare_dummy_anchoring_point`): For unique (dummy) atoms, finds core/env anchor atoms that are bonded or constrained to them. Populates `anchoring_points_A/B` and `anchor_connectivity_A/B`, which drive angle and improper potentials for dummy atoms to maintain stereo geometry.
+
+**Angles and dihedrals**: `_prepare_angle()` and `_prepare_dihe()` are stubs (not yet implemented).
+
+**Subclasses** (stubs, not yet implemented):
+- `HybridRest2TopologyFactory` — basic RBFE
+- `HybridRest2TopologyFactoryWaterSwap` — RBFE with water swap
+- `HybridRest2TopologyFactoryWaterIonSwap` — RBFE with water + ion swap
+
+**Helper functions:**
+- `hybird_constraint_check()` — validates constraint lengths for mapped atom pairs; removes H atoms where constraint lengths differ between A and B
+- `sp3_stereo_solver()` — computes the A-C-A-B improper dihedral angle for an SP3 center given A-C-A and B-C-A angles
 
 ## Nonbonded Force
 

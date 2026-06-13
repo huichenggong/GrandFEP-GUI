@@ -15,6 +15,14 @@ from .molecules import (
     DihedralTable,
     NonbondedExceptionTable,
     DihedralPartition,
+    VirtualSiteInfo,
     MolecularSystem,
 )
-from .hybrid_factory import HybridIndexMapping, Rest2TopologyFactory, HybridRest2TopologyFactoryBase
+from .hybrid_factory import (
+    HybridIndexMapping,
+    Rest2TopologyFactory,
+    hybird_constraint_check,
+    sp3_stereo_solver,
+    HybridRest2TopologyFactoryBase,
+
+)

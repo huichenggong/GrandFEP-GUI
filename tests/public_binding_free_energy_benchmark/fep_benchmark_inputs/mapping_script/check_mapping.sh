@@ -27,4 +27,5 @@ echo "Here are the edges :"
 ls -d edge_*
 for edge_dir in $( ls -d edge_* ); do
     /home/cheng/Software/miniforge3/envs/pymol/bin/pymol -r $script_dir/view_edge.py -- ./$edge_dir
+    sleep 0.1
 done

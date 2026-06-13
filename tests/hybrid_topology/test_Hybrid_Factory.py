@@ -25,6 +25,50 @@ def get_rotatable_bond_from_sdf(sdf):
     return matches
 
 class MyTestCase(unittest.TestCase):
+    def test_hybrid_constraint_check(self):
+        ligand_path = base / "public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/waterset/hsp90_woodhead/"
+        lig1_path = ligand_path / "ligand_preparation/A02"
+        lig2_path = ligand_path / "ligand_preparation/A01"
+        inpcrdA, prmtopA, systemA = utils.load_amber_sys(
+            lig1_path / "02_solv.inpcrd",
+            lig1_path / "02_solv.prmtop",
+        )
+        topA = prmtopA.topology
+        rotatable_A = get_rotatable_bond_from_sdf(lig1_path / f"{lig1_path.name}.sdf")
+        inpcrdB, prmtopB, systemB = utils.load_amber_sys(
+            lig2_path / "02_solv.inpcrd",
+            lig2_path / "02_solv.prmtop",
+        )
+        topB = prmtopB.topology
+        rotatable_B = get_rotatable_bond_from_sdf(lig2_path / f"{lig2_path.name}.sdf")
+        with open(ligand_path / "edge_1_0/mapping.json") as f:
+            mapping = json.load(f)
+
+        new_pairs, removed_pairs = hybrid_topology.hybird_constraint_check(mapping["atom_map"], systemA, topA, systemB, topB)
+        self.assertEqual(len(new_pairs), 39)
+        self.assertEqual(removed_pairs, [(40,42)])
+
+    def test_sp3_stereo_solver(self):
+        dihe = hybrid_topology.sp3_stereo_solver(np.arccos(-1/3), np.arccos(-1/3))
+        self.assertAlmostEqual(dihe, 2/3*np.pi)
+
+        from MDAnalysis.lib.distances import calc_dihedrals
+        a1 = np.array([ 1, 1, 0])
+        a2 = np.array([-1, 1, 0])
+        C  = np.array([ 0, 0, 0])
+        b1 = np.array([ 0,-1, 1])
+        cos_theta = np.dot(a2, b1) / (np.linalg.norm(a2) * np.linalg.norm(b1))
+        dihe = hybrid_topology.sp3_stereo_solver(0.5 * np.pi, np.arccos(cos_theta))
+        angle_rad = calc_dihedrals(
+            a1.reshape(1, 3),
+            a2.reshape(1, 3),
+            C .reshape(1, 3),
+            b1.reshape(1, 3)
+        )
+        self.assertAlmostEqual(dihe, angle_rad[0])
+
+
+
     def test_hybrid_rest2(self):
         print("# Macrocycle 2B8V")
         ligand_path = base / "public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/macrocycles/2B8V_lig24and25_alpha05/"

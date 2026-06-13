@@ -570,6 +570,99 @@ class HybridIndexMapping:
 
 
 # Hybrid RBFE REST2
+def hybird_constraint_check(mapping_AB_pair: list,
+                            system_A: openmm.System,
+                            topology_A: app.topology.Topology,
+                            system_B: openmm.System,
+                            topology_B: app.topology.Topology,
+                            ) -> tuple[list, list]:
+    """Check constraint lengths for all mapped atom pairs and remove H atoms where length differs.
+
+    Parameters
+    ----------
+    mapping_AB_pair:
+        List of (A_global_idx, B_global_idx) pairs representing the atom mapping.
+    system_A, topology_A:
+        OpenMM system and topology for state A.
+    system_B, topology_B:
+        OpenMM system and topology for state B.
+
+    Returns
+    -------
+    new_mapping_AB_pair : list
+        Cleaned mapping with mismatched-H pairs removed.
+    removed_pairs : list
+        The (A_global_idx, B_global_idx) pairs that were removed.
+    """
+    ms_A = hybrid_topology.MolecularSystem().gen_from_openmm_system(system_A, topology_A)
+    ms_B = hybrid_topology.MolecularSystem().gen_from_openmm_system(system_B, topology_B)
+    map_A_to_B = {a: b for a, b in mapping_AB_pair}
+
+    constraint_B = {
+        (min(c.atoms[0], c.atoms[1]), max(c.atoms[0], c.atoms[1])): c.potential.length0
+        for c in ms_B.constraints_list
+    }
+
+    to_remove_A: set[int] = set()
+    removed_pairs: list = []
+    for c in ms_A.constraints_list:
+        at0_A, at1_A = c.atoms[0], c.atoms[1]
+        if at0_A not in map_A_to_B or at1_A not in map_A_to_B:
+            continue
+        at0_B = map_A_to_B[at0_A]
+        at1_B = map_A_to_B[at1_A]
+        key_B = (min(at0_B, at1_B), max(at0_B, at1_B))
+        if key_B not in constraint_B:
+            continue
+        if not np.isclose(constraint_B[key_B], c.potential.length0):
+            for at_A in (at0_A, at1_A):
+                if ms_A.atoms[at_A].element == "H" and at_A not in to_remove_A:
+                    warnings.warn(
+                        f"Constraint length mismatch for A-atom {at_A} (H): "
+                        f"A={c.potential.length0:.6f} nm, B={constraint_B[key_B]:.6f} nm."
+                    )
+                    to_remove_A.add(at_A)
+                    removed_pairs.append((at_A, map_A_to_B[at_A]))
+
+    new_mapping_AB_pair = [(a, b) for a, b in mapping_AB_pair if a not in to_remove_A]
+    return new_mapping_AB_pair, removed_pairs
+
+def sp3_stereo_solver(angle_A_C_A, angle_B_C_A):
+    r"""
+    Given A-C-A and B-C-A angle, calculate A-C-A-B improper dihedral.
+
+    Diagram::
+
+         A1
+          \
+           C - B1
+         /   \
+        A2   B2
+
+    Assumes the SP3 center is symmetric: all A-C-B angles equal
+    *angle_B_C_A*. Coordinate construction: A1 = (cos(aca/2), sin(aca/2), 0)
+    [unit, in xy-plane]; A2 = (cos(aca/2), -sin(aca/2), 0) [unit, symmetric];
+    B1 in yz-plane s.t. B1·A1 = cos(bca).
+
+    Closed-form result: cos(dihedral) = -tan(aca/2) / tan(bca).
+
+    Parameters
+    ----------
+    angle_A_C_A : float
+        A1-C-A2 angle in radians.
+    angle_B_C_A : float
+        B1-C-A1 angle in radians.
+
+    Returns
+    -------
+    dihedral: float
+        Dihedral A1-C-A2-B1 in radians, in [0, pi].
+    """
+    aca = angle_A_C_A
+    bca = angle_B_C_A
+    cos_dih = np.tan(aca / 2.0) / np.tan(bca)
+    return np.arccos(np.clip(cos_dih, -1.0, 1.0))
+
 class HybridRest2TopologyFactoryBase:
     """
     This class generate a topology for REST2 RBFE simulation.
@@ -591,7 +684,7 @@ class HybridRest2TopologyFactoryBase:
         self.molecule_system_B = hybrid_topology.MolecularSystem().gen_from_openmm_system(system_B, index_mapping.topologyB)
         self.molecule_system_A.set_rotatable_bonds(rotatable_A)
         self.molecule_system_B.set_rotatable_bonds(rotatable_B)
-        self.rotatable_bonds = None
+        self.rotatable_bonds = set()
         self._set_rotatable_bonds()
 
         self.system = openmm.System()
@@ -987,6 +1080,26 @@ class HybridRest2TopologyFactoryBase:
 
         ``anchor_connectivity_B`` : dict[int, dict[str, list[int]]]
             Same structure as ``anchor_connectivity_A`` but for state B anchors.
+
+        For different anchoring point, there are differences in potentials to give dummy
+
+        Stereo SP3, 1 angle + 1 improper for 1 Dum atom
+            4_SP3 to 3_R + 1_Dum
+            4_SP3 to 2_R + 2_Dum
+
+        Stereo flat, 1 angle + 1 improper for 1 Dum atom
+            3_SP3 to 2_R + 1_Dum
+            3_SP2 to 2_R + 1_Dum
+
+        Keep all angle
+            4_SP3 to 1_R + 3_Dum
+            3_SP3 to 1_R + 2_Dum
+            3_SP2 to 1_R + 2_Dum
+            2_SP3 to 1_R + 1_Dum
+            2_SP2 to 1_R + 1_Dum
+            2_SP  to 1_R + 1_Dum
+
+
         """
         mapping = self.index_mapping
         ms_A    = self.molecule_system_A
@@ -1040,6 +1153,13 @@ class HybridRest2TopologyFactoryBase:
         }
         all_anchors_B = {a for s in self.anchoring_points_B.values() for a in s}
         self.anchor_connectivity_B = _anchor_connectivity(all_anchors_B, neighbors_B)
+
+        # For anchoring point
+        ## 4 to 3_R + 1_Dum
+        ## 4 to 2_R + 2_Dum
+        ### R1-R-D1, R1-R-D2
+        ### R2-R1-R-D1, R2-R1-R-D2,
+        ## 4 to 1_R + 3_Dum, keep all R-R-D angle
 
     def _prepare_angle(self):
         pass
