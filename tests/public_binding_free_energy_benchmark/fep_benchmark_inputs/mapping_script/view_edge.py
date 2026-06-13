@@ -3,44 +3,27 @@
 view_edge.py — PyMOL script to visualize one LOMAP edge mapping.
 
 Usage (command line):
-    pymol -r view_edge.py -- /path/to/edge_dir
+    pymol -r view_edge.py -- mol_a.sdf mol_b.sdf mapping.json
 
 Usage (inside PyMOL):
     run /path/to/view_edge.py
-    (PyMOL must be cd'd to the edge directory, or edit EDGE_DIR below)
+    view_edge mol_a.sdf, mol_b.sdf, mapping.json
 
 Visualization key
 -----------------
-- Paired atoms (mapped)    : matching colored spheres in both molecules
-- Unmapped atoms            : gray sticks
-- Broken-bond atoms         : red spheres (larger), red sticks on the broken bond
-- Grid mode                 : mol_a (left) and mol_b (right) in separate panels
+- Paired atoms (mapped)      : matching colored spheres in both molecules
+- Unmapped atoms              : gray sticks
+- Broken-bond atoms           : red spheres (larger), red sticks on the broken bond
+- Grid mode                   : mol_a (left) and mol_b (right) in separate panels
 """
 
 import colorsys
 import json
+import random
 import sys
 from pathlib import Path
 
-# ── OVERRIDE THIS if running with `run view_edge.py` inside PyMOL ─────────────
-EDGE_DIR = None   # e.g. "/path/to/edge_0_2"   — None = auto-detect
-# ─────────────────────────────────────────────────────────────────────────────
-
 from pymol import cmd  # noqa: E402
-
-
-def _detect_edge_dir() -> Path:
-    """Pick edge directory from CLI args, EDGE_DIR override, or cwd."""
-    if EDGE_DIR is not None:
-        return Path(EDGE_DIR)
-    # pymol -r view_edge.py -- /path/to/edge
-    script_stripped = [a for a in sys.argv if not a.startswith("-") and a != "--"]
-    # argv[0] is the script itself when pymol passes it through
-    for candidate in reversed(script_stripped):
-        p = Path(candidate)
-        if p.is_dir() and (p / "mapping_constraint_checked.json").exists():
-            return p
-    return Path.cwd()
 
 
 def _rank_sel(obj: str, idx: int) -> str:
@@ -52,12 +35,21 @@ def _multi_rank_sel(obj: str, indices) -> str:
     return f"({obj} and ({parts}))"
 
 
-def view_edge(edge_dir: str | Path | None = None):
-    edge_dir = Path(edge_dir) if edge_dir else _detect_edge_dir()
+def view_edge(mol_a_sdf: str | Path, mol_b_sdf: str | Path, mapping_json: str | Path):
+    """Visualize a LOMAP edge mapping in PyMOL.
 
-    mol_a_path   = edge_dir / "mol_a.sdf"
-    mol_b_path   = edge_dir / "mol_b.sdf"
-    mapping_path = edge_dir / "mapping_constraint_checked.json"
+    Parameters
+    ----------
+    mol_a_sdf :
+        Path to mol_a SDF file.
+    mol_b_sdf :
+        Path to mol_b SDF file.
+    mapping_json :
+        Path to mapping JSON file (mapping_constraint_checked.json).
+    """
+    mol_a_path = Path(mol_a_sdf)
+    mol_b_path = Path(mol_b_sdf)
+    mapping_path = Path(mapping_json)
 
     for p in (mol_a_path, mol_b_path, mapping_path):
         if not p.exists():
@@ -77,7 +69,6 @@ def view_edge(edge_dir: str | Path | None = None):
     cmd.load(str(mol_a_path), "mol_a")
     cmd.load(str(mol_b_path), "mol_b")
 
-
     # ── Base representation ───────────────────────────────────────────────────
     cmd.hide("everything", "all")
     cmd.show("sticks", "all")
@@ -91,8 +82,9 @@ def view_edge(edge_dir: str | Path | None = None):
     # ── Mapped pairs: unique hue, spheres ────────────────────────────────────
     n = len(atom_map)
     _GOLDEN = 0.618033988749895   # 1/φ — maximises hue distance between neighbours
+    _hue_offset = random.random()  # shift the whole color cycle each run
     for i, (ia, ib) in enumerate(atom_map):
-        r, g, b = colorsys.hsv_to_rgb((i * _GOLDEN) % 1.0, 0.80, 0.95)
+        r, g, b = colorsys.hsv_to_rgb((_hue_offset + i * _GOLDEN) % 1.0, 0.80, 0.95)
         cname = f"pair_{i}"
         cmd.set_color(cname, [r, g, b])
         cmd.color(cname, _rank_sel("mol_a", ia))
@@ -104,15 +96,11 @@ def view_edge(edge_dir: str | Path | None = None):
     def highlight_broken(obj, bonds):
         if not bonds:
             return
-        # Combined selection: all atoms involved in any broken bond
         all_atoms = sorted({idx for pair in bonds for idx in pair})
         sel_atoms = _multi_rank_sel(obj, all_atoms)
-        # cmd.color("firebrick", sel_atoms)
-        # cmd.show("spheres", sel_atoms)
         combined = f"brk_{obj}"
         cmd.select(combined, sel_atoms)
 
-        # Per-bond selections: brk_mol_a_0, brk_mol_a_1, …
         for k, (u, v) in enumerate(bonds):
             bname = f"brk_{obj}_{k}"
             cmd.select(bname, f"{obj} and (rank {u} or rank {v})")
@@ -131,14 +119,15 @@ def view_edge(edge_dir: str | Path | None = None):
     cmd.zoom("all", buffer=3)
     cmd.deselect()
 
-    # ────────────────────────────────────────────────────────────────────────────
+    # ── Load element-colored copies ───────────────────────────────────────────
     cmd.load(str(mol_a_path), "mol_a_element")
     cmd.load(str(mol_b_path), "mol_b_element")
 
     # ── Summary ───────────────────────────────────────────────────────────────
-    print(f"\n=== {edge_dir.name} ===")
-    print(f"  mol_a : {mol_a_path.name}")
-    print(f"  mol_b : {mol_b_path.name}")
+    print(f"\n=== {mol_a_path.absolute().parent.name} ===")
+    print(f"  mol_a    : {mol_a_path.name}")
+    print(f"  mol_b    : {mol_b_path.name}")
+    print(f"  mapping  : {mapping_path.name}")
     print(f"  Mapped pairs : {n}")
     if broken_a:
         print(f"  Broken bonds mol_a : {broken_a}")
@@ -147,4 +136,12 @@ def view_edge(edge_dir: str | Path | None = None):
     print()
 
 
-view_edge()
+# ── Register as PyMOL command ──────────────────────────────────────────────────
+cmd.extend("view_edge", view_edge)
+
+# ── CLI entry point ────────────────────────────────────────────────────────────
+if __name__ == "__main__" or "--" in sys.argv or "-r" in sys.argv:
+    # pymol -r view_edge.py -- mol_a.sdf mol_b.sdf mapping.json
+    args = [a for a in sys.argv[1:] if not a.startswith("-") and a != "--"]
+    if len(args) >= 3:
+        view_edge(args[-3], args[-2], args[-1])
