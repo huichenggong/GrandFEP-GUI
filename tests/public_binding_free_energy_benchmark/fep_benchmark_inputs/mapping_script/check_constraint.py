@@ -96,9 +96,6 @@ def process_edge(
 
     updated = dict(mapping)
     updated["atom_map"] = new_map
-    for key in ("hybridization_moli", "hybridization_molj"):
-        if key in mapping:
-            updated[key] = [mapping[key][pos] for pos in kept_pos]
 
     out_path = edge_dir / "mapping_constraint_checked.json"
     with open(out_path, "w") as fh:
