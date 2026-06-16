@@ -9,6 +9,7 @@ build/
 app/uploads/
 !app/uploads/.gitkeep
 /.idea/*
+.vscode/
 
 /tests/public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/waterset/brd41_ASH106/*
 /tests/public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/waterset/chk1/*
