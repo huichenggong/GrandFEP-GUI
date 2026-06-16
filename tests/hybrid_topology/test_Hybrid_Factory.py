@@ -143,13 +143,26 @@ class MyTestCase(unittest.TestCase):
             mapping = json.load(f)
 
         index_map = hybrid_topology.HybridIndexMapping(topA, topB, {0: mapping})
+        self.assertListEqual(["SP3", "SP3", "SP2", "SP2", "SP2"], [index_map.hybridization["A"][0][idx] for idx in [1, 2, 3, 4, 5]])
+        self.assertListEqual(["SP3", "SP3", "SP2", "SP2", "SP2"], [index_map.hybridization["B"][0][idx] for idx in [2, 3, 4, 5, 6]])
         h_factory = hybrid_topology.HybridRest2TopologyFactoryBase(
             systemA, inpcrdA.positions, rotatable_A,
             systemB, inpcrdB.positions, rotatable_B,
             index_map
         )
-        # print(h_factory.anchor_connectivity_A)
-        # print(h_factory.anchor_connectivity_B)
+        self.assertListEqual(
+            [h_factory.molecule_system_B.atoms[i].hybridization for i in [1, 19, 20, 21]],
+            ["SP3", "SP2", "SP2", "SP2"])  # C, C, C, O
+        self.assertListEqual(
+            [h_factory.molecule_system_B.atoms[i].hybridization for i in [5, 6, 7, 9]],
+            ["SP2", "SP2", "SP2", "SP2"]) # C, C, C, N
+
+        self.assertSetEqual({1, 21}, set([h_factory.index_mapping.map_hybrid_to_A[hybrid_idx] for hybrid_idx in h_factory.anchor_connectivity_A.keys()]))
+        self.assertTupleEqual(h_factory.anchor_connectivity_A[1]["summary"], ("SP3", 3, 1))
+        self.assertTupleEqual(h_factory.anchor_connectivity_A[21]["summary"], ("SP2", 1, 1))
+        self.assertTupleEqual(h_factory.anchor_connectivity_B[1]["summary"], ("SP3", 3, 1))
+        self.assertTupleEqual(h_factory.anchor_connectivity_B[21]["summary"], ("SP2", 1, 2))
+        print(h_factory.anchor_connectivity_B)
 
 
 

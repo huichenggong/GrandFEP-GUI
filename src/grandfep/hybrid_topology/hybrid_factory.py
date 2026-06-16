@@ -352,11 +352,13 @@ class HybridIndexMapping:
     index_a2b : dict[int, dict]
         Maps residue index (0-based) to a mapping entry with keys:
 
-        - ``"atom_map"``          : list of ``[local_A, local_B]`` pairs (required)
-        - ``"core_A"``            : list of local-A indices that are core (optional;
-                                    absent → all mapped atoms are core)
-        - ``"broken_bonds_moli"`` : list of ``[i, j]`` local-A pairs (optional)
-        - ``"broken_bonds_molj"`` : list of ``[i, j]`` local-B pairs (optional)
+        - ``"atom_map"``           : list of ``[local_A, local_B]`` pairs (required)
+        - ``"core_A"``             : list of local-A indices that are core (optional;
+                                     absent → all mapped atoms are core)
+        - ``"broken_bonds_moli"``  : list of ``[i, j]`` local-A pairs (optional)
+        - ``"broken_bonds_molj"``  : list of ``[i, j]`` local-B pairs (optional)
+        - ``"hybridization_moli"`` : list of hybridization string for atoms in state A
+        - ``"hybridization_moli"`` : list of hybridization string for atoms in state B
 
     Examples
     --------
@@ -366,11 +368,11 @@ class HybridIndexMapping:
         from grandfep.hybrid_topology.hybrid_factory import HybridIndexMapping
         import json
 
-        ligand_path = Path("tests/.../2B8V_lig24and25_alpha05")
-        _, prmtopA, _ = utils.load_amber_sys(
+        ligand_path = Path("tests/public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/macrocycles/2B8V_lig24and25_alpha05")
+        inpcrdA, prmtopA, systemA = utils.load_amber_sys(
             ligand_path / "ligand_preparation/A01/01_dry.inpcrd",
             ligand_path / "ligand_preparation/A01/01_dry.prmtop")
-        _, prmtopB, _ = utils.load_amber_sys(
+        inpcrdB, prmtopB, systemB = utils.load_amber_sys(
             ligand_path / "ligand_preparation/A02/01_dry.inpcrd",
             ligand_path / "ligand_preparation/A02/01_dry.prmtop")
 
@@ -403,6 +405,10 @@ class HybridIndexMapping:
         self.broken_bonds_A: list[tuple[int, int]] = []  # hybrid pairs: in A, absent in B
         self.broken_bonds_B: list[tuple[int, int]] = []  # hybrid pairs: in B, absent in A
         self.core_atoms: set[int] = set()  # hybrid indices whose parameters change between A and B
+        self.hybridization = {
+            "A":{idx:res_map_info["hybridization_moli"] for idx,  res_map_info in index_a2b.items()},
+            "B":{idx:res_map_info["hybridization_molj"] for idx,  res_map_info in index_a2b.items()},
+        }
 
         hybrid_atom_count = 0
         for res_idx, (resA, resB) in enumerate(zip(topA_residues, topB_residues)):
@@ -686,6 +692,11 @@ class HybridRest2TopologyFactoryBase:
         self.molecule_system_B.set_rotatable_bonds(rotatable_B)
         self.rotatable_bonds = set()
         self._set_rotatable_bonds()
+
+        for res_id, hyb_list in self.index_mapping.hybridization["A"].items():
+            self.molecule_system_A.set_hybridization_for_residues(res_id, hyb_list)
+        for res_id, hyb_list in self.index_mapping.hybridization["B"].items():
+            self.molecule_system_B.set_hybridization_for_residues(res_id, hyb_list)
 
         self.system = openmm.System()
         self._prepare_system()                # Add particle, constraint, virtual site, default box vector
@@ -1154,12 +1165,44 @@ class HybridRest2TopologyFactoryBase:
         all_anchors_B = {a for s in self.anchoring_points_B.values() for a in s}
         self.anchor_connectivity_B = _anchor_connectivity(all_anchors_B, neighbors_B)
 
-        # For anchoring point
-        ## 4 to 3_R + 1_Dum
-        ## 4 to 2_R + 2_Dum
-        ### R1-R-D1, R1-R-D2
-        ### R2-R1-R-D1, R2-R1-R-D2,
-        ## 4 to 1_R + 3_Dum, keep all R-R-D angle
+        # Build additional parameters for anchoring points
+        ## For all unique_A connected to real system
+        AnchorSummary = namedtuple("AnchorSummary", ["hybridization", "real_count", "dummy_count"])
+        for center_idx, connection_dict in self.anchor_connectivity_A.items():
+            hybridization = self.molecule_system_A.atoms[center_idx].hybridization
+            real_count = len(connection_dict["env"]) + len(connection_dict["core"])
+            dummy_count = len(connection_dict["unique_A"])
+            connection_dict["summary"] = AnchorSummary(hybridization, real_count, dummy_count)
+            if real_count == 1:
+                # keep all angle
+                pass
+            elif hybridization=="SP3":
+                if real_count + dummy_count == 4:
+                    # build stereo SP3 for each dummy
+                    pass
+                elif real_count + dummy_count == 3:
+                    # build stereo flat for each dummy
+                    pass
+                else:
+                    assert False, f"Impossible {hybridization} anchoring point with {real_count=} + {dummy_count=}"
+            elif hybridization=="SP2":
+                assert real_count == 2
+                assert dummy_count == 1
+                # build stereo flat
+                pass
+            elif hybridization not in ["SP3", "SP2", "SP"]:
+                # keep all angle
+                warnings.warn(f"Unseen hybridization {hybridization=}")
+
+
+
+
+        ## For all unique_B connected to real system
+        for center_idx, connection_dict in self.anchor_connectivity_B.items():
+            hybridization = self.molecule_system_B.atoms[center_idx].hybridization
+            real_count = len(connection_dict["env"]) + len(connection_dict["core"])
+            dummy_count = len(connection_dict["unique_B"])
+            connection_dict["summary"] = AnchorSummary(hybridization, real_count, dummy_count)
 
     def _prepare_angle(self):
         pass

@@ -30,35 +30,41 @@ def inference_hybridization_rdkit(mol):
 
 class MyTestCase_MolecularSystem(unittest.TestCase):
     def test_MolecularSystem_gen(self):
+        print("# TEST MolecularSystem")
+        lig_base = base / "public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/waterset/hsp90_woodhead/ligand_preparation/A01"
 
         # find all the rotatable bond from using rdkit
-        sdf_path = base / "schrodinger_sets/water_set/hsp90_woodhead/test/A01/A01.sdf"
+        sdf_path = lig_base / "A01.sdf"
         supplier = Chem.SDMolSupplier(str(sdf_path), removeHs=False)
         mol = supplier[0]
 
         query = Lipinski.RotatableBondSmarts
         matches = mol.GetSubstructMatches(query)
 
-        print(matches)
-
         inpcrd, prmtop, system = utils.load_amber_sys(
-            base / "schrodinger_sets/water_set/hsp90_woodhead/test/A01/01_dry.inpcrd",
-            base / "schrodinger_sets/water_set/hsp90_woodhead/test/A01/01_dry.prmtop",
+            lig_base / "01_dry.inpcrd",
+            lig_base / "01_dry.prmtop",
         )
         mol_system = hybrid_topology.MolecularSystem().gen_from_openmm_system(system, prmtop.topology)
 
+        print("## Find terms according to a atom")
         terms = mol_system.terms_for_atom(6)
         self.assertEqual(len(terms["bonds"]),              3)
         self.assertEqual(len(terms["angles"]),             9)
         self.assertEqual(len(terms["proper_dihedrals"]),  23)
         self.assertEqual(len(terms["improper_dihedrals"]), 4)
 
-        mol_system = hybrid_topology.MolecularSystem().gen_from_openmm_system(system, prmtop.topology)
+        print("## Find dihedral according to the rotatable bond")
         mol_system.set_rotatable_bonds(((0, 2),))
         dihe = mol_system.rest2_scalable_dihedrals()
         self.assertEqual(len(dihe.proper_rest2), 9)
         self.assertEqual(len(dihe.improper), 15)
         self.assertEqual(len(dihe.proper_not_rest2), 120)
+
+        print("## Assign hybridization from sdf")
+        mol_system.set_hybridization_for_residues_from_sdf(0, lig_base / "A01.sdf")
+        self.assertListEqual([mol_system.atoms[i].hybridization for i in [2, 3, 4]], ["SP3", "SP3", "SP2"])
+
 
 class MyTestCase_MolecularSystem_REST2(unittest.TestCase):
     def test_Rest2TopologyFactory(self):

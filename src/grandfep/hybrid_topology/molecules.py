@@ -1,9 +1,10 @@
 import math
 from dataclasses import dataclass, field
 from collections import defaultdict
-from typing import Optional, NamedTuple
+from typing import Optional, NamedTuple, List
 
 from openmm import app, unit, openmm
+from rdkit import Chem
 
 
 @dataclass
@@ -589,3 +590,74 @@ class MolecularSystem:
         Set internal set of rotatable bonds
         """
         self.rotatable_bonds = {(min(a, b), max(a, b)) for a, b in rotatable_bonds}
+
+    def set_hybridization_for_residues(self, residue_id: int, hybridization: list[str]):
+        """Assign hybridization for all the atom in residue_id
+        """
+        residue = self.residues[residue_id]
+        if len(hybridization) != len(residue.atom_ids):
+            raise ValueError(
+                f"Residue {residue.name}: expected {len(residue.atom_ids)} atoms, "
+                f"got {len(hybridization)} in hybridizatino"
+            )
+        for atom_id, hyb in zip(residue.atom_ids, hybridization):
+            self.atoms[atom_id].hybridization = hyb
+
+
+
+    def set_hybridization_for_residues_from_mol(self, residue_id: int, mol) -> None:
+        """Assign hybridization from an RDKit mol to atoms of a residue by position.
+
+        Atoms are matched positionally: mol atom 0 → residue.atom_ids[0], etc.
+        Element symbols are cross-checked to catch ordering mismatches.
+        mol must include explicit H (created with removeHs=False).
+
+        Examples
+        --------
+        .. code-block:: python
+
+            from pathlib import Path()
+            from rdkit import Chem
+            lig_base = Path("tests/public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/waterset/hsp90_woodhead/ligand_preparation/A01")
+            inpcrd, prmtop, system = utils.load_amber_sys(
+                lig_base / "01_dry.inpcrd",
+                lig_base / "01_dry.prmtop",
+            )
+            mol_system = hybrid_topology.MolecularSystem().gen_from_openmm_system(system, prmtop.topology)
+            mol = Chem.SDMolSupplier(lig_base/"A01.sdf", removeHs=False)[0]
+            mol_system.set_hybridization_for_residues_from_mol(0, mol)
+            print([mol_system.atoms[i].hybridization for i in [2, 3, 4]])
+
+        """
+        residue = self.residues[residue_id]
+        rdkit_atoms = list(mol.GetAtoms())
+        if len(rdkit_atoms) != len(residue.atom_ids):
+            raise ValueError(
+                f"Residue {residue.name}: expected {len(residue.atom_ids)} atoms, "
+                f"got {len(rdkit_atoms)} in mol"
+            )
+        for atom_id, rdkit_atom in zip(residue.atom_ids, rdkit_atoms):
+            system_element = self.atoms[atom_id].element
+            mol_element = rdkit_atom.GetSymbol()
+            if system_element != mol_element:
+                raise ValueError(
+                    f"Element mismatch at position {rdkit_atom.GetIdx()}: "
+                    f"system has '{system_element}', mol has '{mol_element}'"
+                )
+            self.atoms[atom_id].hybridization = str(rdkit_atom.GetHybridization())
+
+    def set_hybridization_for_residues_from_sdf(self, residue_id: int, sdf) -> None:
+        """Read hybridization from the first molecule in an SDF and assign to atoms.
+
+        Convenience wrapper around :meth:`set_hybridization_for_residues_from_mol`.
+
+        Example
+        -------
+        >>> mol_system.set_hybridization_for_residues_from_sdf(0, "A01.sdf")
+        >>> [mol_system.atoms[i].hybridization for i in [2, 3, 4]]
+        ['SP3', 'SP3', 'SP2']
+        """
+        mol = Chem.SDMolSupplier(str(sdf), removeHs=False)[0]
+        if mol is None:
+            raise ValueError(f"Could not read molecule from {sdf}")
+        self.set_hybridization_for_residues_from_mol(residue_id, mol)
