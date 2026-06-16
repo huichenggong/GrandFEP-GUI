@@ -28,9 +28,12 @@ ls -d edge_*
 base=$PWD
 for edge_dir in $( ls -d edge_* ); do
     cd $base/${edge_dir}
+    if [ ! -f "mapping_visial_checked.json" ]; then
+        cp mapping_constraint_checked.json mapping_visial_checked.json
+    fi
     /home/cheng/Software/miniforge3/envs/pymol/bin/pymol -r $script_dir/view_edge.py -- \
         ./mol_a.sdf \
         ./mol_b.sdf \
-        ./mapping_constraint_checked.json
+        ./mapping_visial_checked.json
     sleep 0.1
 done
