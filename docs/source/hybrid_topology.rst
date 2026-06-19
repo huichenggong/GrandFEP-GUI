@@ -212,6 +212,6 @@ Nonbonded interaction will differ because of water-swap or ion-swap.
 Helper functions
 ~~~~~~~~~~~~~~~~
 
-.. autofunction:: hybird_constraint_check
+.. autofunction:: hybrid_constraint_check
 
 .. autofunction:: sp3_stereo_solver

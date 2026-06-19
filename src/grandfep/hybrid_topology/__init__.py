@@ -21,7 +21,7 @@ from .molecules import (
 from .hybrid_factory import (
     HybridIndexMapping,
     Rest2TopologyFactory,
-    hybird_constraint_check,
+    hybrid_constraint_check,
     sp3_stereo_solver,
     HybridRest2TopologyFactoryBase,
 

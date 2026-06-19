@@ -26,7 +26,7 @@ from openmm import app
 _REPO_ROOT = Path(__file__).parents[4]
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from grandfep.hybrid_topology.hybrid_factory import hybird_constraint_check
+from grandfep.hybrid_topology.hybrid_factory import hybrid_constraint_check
 
 
 def load_amber_system(prmtop_path: Path, inpcrd_path: Path):
@@ -81,7 +81,7 @@ def process_edge(
     system_j, top_j = load_amber_system(prmtop_j, inpcrd_j)
 
     # Dry systems contain only the ligand, so local indices == global indices.
-    new_map, removed = hybird_constraint_check(
+    new_map, removed = hybrid_constraint_check(
         atom_map, system_i, top_i, system_j, top_j
     )
 

@@ -44,7 +44,7 @@ class MyTestCase(unittest.TestCase):
         with open(ligand_path / "edge_1_0/mapping.json") as f:
             mapping = json.load(f)
 
-        new_pairs, removed_pairs = hybrid_topology.hybird_constraint_check(mapping["atom_map"], systemA, topA, systemB, topB)
+        new_pairs, removed_pairs = hybrid_topology.hybrid_constraint_check(mapping["atom_map"], systemA, topA, systemB, topB)
         self.assertEqual(len(new_pairs), 39)
         self.assertEqual(removed_pairs, [(40,42)])
 

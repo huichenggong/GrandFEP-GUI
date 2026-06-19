@@ -576,7 +576,7 @@ class HybridIndexMapping:
 
 
 # Hybrid RBFE REST2
-def hybird_constraint_check(mapping_AB_pair: list,
+def hybrid_constraint_check(mapping_AB_pair: list,
                             system_A: openmm.System,
                             topology_A: app.topology.Topology,
                             system_B: openmm.System,
@@ -1092,7 +1092,9 @@ class HybridRest2TopologyFactoryBase:
         ``anchor_connectivity_B`` : dict[int, dict[str, list[int]]]
             Same structure as ``anchor_connectivity_A`` but for state B anchors.
 
-        For different anchoring point, there are differences in potentials to give dummy
+        For a different anchoring points. We set some additional angle and improper dihedral between the dummy and real
+        atoms. Step 1: We remove all D-R-R (R-R-D) angle, and D-R-R-R normal dihedral. Step 2: We add 1 angle
+        and 1 improper dihedral per dummy atom if needed.
 
         Stereo SP3, 1 angle + 1 improper for 1 Dum atom
             4_SP3 to 3_R + 1_Dum
@@ -1193,6 +1195,7 @@ class HybridRest2TopologyFactoryBase:
             elif hybridization not in ["SP3", "SP2", "SP"]:
                 # keep all angle
                 warnings.warn(f"Unseen hybridization {hybridization=}")
+        # remove interactions across break bond
 
 
 
