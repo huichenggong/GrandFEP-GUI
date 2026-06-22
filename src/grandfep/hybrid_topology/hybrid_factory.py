@@ -1064,8 +1064,11 @@ class HybridRest2TopologyFactoryBase:
 
         self.system.addForce(h_force)
         self.system.addForce(c_h_force)
+        c_h_force.setName("CustomBondForce_h") # hard/harmonic
         self.system.addForce(c_s_force_A)
+        c_s_force_A.setName("CustomBondForce_s_A") # soft bond in state A
         self.system.addForce(c_s_force_B)
+        c_s_force_B.setName("CustomBondForce_s_B") # soft bond in state B
 
 
 

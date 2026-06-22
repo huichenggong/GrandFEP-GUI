@@ -67,10 +67,8 @@ class MyTestCase(unittest.TestCase):
         )
         self.assertAlmostEqual(dihe, angle_rad[0])
 
-
-
     def test_hybrid_rest2(self):
-        print("# Macrocycle 2B8V")
+        print("\n# Macrocycle 2B8V")
         ligand_path = base / "public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/macrocycles/2B8V_lig24and25_alpha05/"
         lig1_path = ligand_path / "ligand_preparation/A01"
         lig2_path = ligand_path / "ligand_preparation/A02"
@@ -86,7 +84,7 @@ class MyTestCase(unittest.TestCase):
         )
         topB = prmtopB.topology
         rotatable_B = get_rotatable_bond_from_sdf(lig2_path / f"{lig2_path.name}.sdf")
-        with open(ligand_path / "edge_0_1/mapping.json") as f:
+        with open(ligand_path / "edge_0_1/mapping_visial_checked.json") as f:
             mapping = json.load(f)
 
         index_map = hybrid_topology.HybridIndexMapping(topA, topB, {0: mapping})
@@ -103,10 +101,12 @@ class MyTestCase(unittest.TestCase):
             separate_force(systemB, ["HarmonicBondForce"]),
             topB, inpcrdB.positions)
         energyH, forceH = calc_energy_force(
-            separate_force(h_factory.system, ["HarmonicBondForce", "CustomBondForce"]),
+            separate_force(h_factory.system, ["HarmonicBondForce", "CustomBondForce",
+                                              "CustomBondForce_h", "CustomBondForce_s_A", "CustomBondForce_s_B"]),
             h_factory.index_mapping.hybrid_top, h_factory.get_hybrid_position(0))
         energyH1, forceH1 = calc_energy_force(
-            separate_force(h_factory.system, ["HarmonicBondForce", "CustomBondForce"]),
+            separate_force(h_factory.system, ["HarmonicBondForce", "CustomBondForce",
+                                              "CustomBondForce_h", "CustomBondForce_s_A", "CustomBondForce_s_B"]),
             h_factory.index_mapping.hybrid_top, h_factory.get_hybrid_position(1),
             global_parameters={"lambda_bonds_A":0.0, "lambda_bonds_B":1.0, "lambda_bonds":1.0})
 
@@ -121,7 +121,6 @@ class MyTestCase(unittest.TestCase):
         reorder_h_2_B = [h_factory.index_mapping.map_B_to_hybrid[i] for i in range(systemB.getNumParticles())]
         all_close, _, error_msg = match_force(forceB, forceH1[reorder_h_2_B])
         self.assertTrue(all_close, "Bonded term state B " + error_msg)
-
 
     def test_hybrid_rest2_hspw(self):
         ligand_path = base / "public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/waterset/hsp90_woodhead/"
