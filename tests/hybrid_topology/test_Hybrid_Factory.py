@@ -24,6 +24,12 @@ def get_rotatable_bond_from_sdf(sdf):
     matches = mol.GetSubstructMatches(query)
     return matches
 
+
+def load_ligand(inpcrd, prmtop, sdf):
+    inpcrd, prmtop, system = utils.load_amber_sys(inpcrd, prmtop)
+    rotatable = get_rotatable_bond_from_sdf(sdf)
+    return inpcrd, prmtop, prmtop.topology, system, rotatable
+
 class MyTestCase(unittest.TestCase):
     def test_hybrid_constraint_check(self):
         ligand_path = base / "public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/waterset/hsp90_woodhead/"
@@ -67,7 +73,7 @@ class MyTestCase(unittest.TestCase):
         )
         self.assertAlmostEqual(dihe, angle_rad[0])
 
-    def test_hybrid_rest2(self):
+    def test_hybrid_rest2_macrocycles_2B8V(self):
         print("\n# Macrocycle 2B8V")
         ligand_path = base / "public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/macrocycles/2B8V_lig24and25_alpha05/"
         lig1_path = ligand_path / "ligand_preparation/A01"
@@ -122,25 +128,22 @@ class MyTestCase(unittest.TestCase):
         all_close, _, error_msg = match_force(forceB, forceH1[reorder_h_2_B])
         self.assertTrue(all_close, "Bonded term state B " + error_msg)
 
-    def test_hybrid_rest2_hspw(self):
+        print(h_factory.anchor_info)
+
+    def test_hybrid_rest2_hspw_edge_1_0(self):
+        print("\n hsp90 woodhead, break a bond in state B")
         ligand_path = base / "public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/waterset/hsp90_woodhead/"
         lig1_path = ligand_path / "ligand_preparation/A02"
         lig2_path = ligand_path / "ligand_preparation/A01"
-        inpcrdA, prmtopA, systemA = utils.load_amber_sys(
-            lig1_path / "02_solv.inpcrd",
-            lig1_path / "02_solv.prmtop",
-        )
-        topA = prmtopA.topology
-        rotatable_A = get_rotatable_bond_from_sdf(lig1_path / f"{lig1_path.name}.sdf")
-        inpcrdB, prmtopB, systemB = utils.load_amber_sys(
-            lig2_path / "02_solv.inpcrd",
-            lig2_path / "02_solv.prmtop",
-        )
-        topB = prmtopB.topology
-        rotatable_B = get_rotatable_bond_from_sdf(lig2_path / f"{lig2_path.name}.sdf")
+
+        inpcrdA, prmtopA, topA, systemA, rotatable_A = load_ligand(lig1_path / "02_solv.inpcrd",
+                                                             lig1_path / "02_solv.prmtop",
+                                                             lig1_path / f"{lig1_path.name}.sdf")
+        inpcrdB, prmtopB, topB, systemB, rotatable_B = load_ligand(lig2_path / "02_solv.inpcrd",
+                                                             lig2_path / "02_solv.prmtop",
+                                                             lig2_path / f"{lig2_path.name}.sdf")
         with open(ligand_path / "edge_1_0/mapping_constraint_checked.json") as f:
             mapping = json.load(f)
-
         index_map = hybrid_topology.HybridIndexMapping(topA, topB, {0: mapping})
         self.assertListEqual(["SP3", "SP3", "SP2", "SP2", "SP2"], [index_map.hybridization["A"][0][idx] for idx in [1, 2, 3, 4, 5]])
         self.assertListEqual(["SP3", "SP3", "SP2", "SP2", "SP2"], [index_map.hybridization["B"][0][idx] for idx in [2, 3, 4, 5, 6]])
@@ -156,12 +159,39 @@ class MyTestCase(unittest.TestCase):
             [h_factory.molecule_system_B.atoms[i].hybridization for i in [5, 6, 7, 9]],
             ["SP2", "SP2", "SP2", "SP2"]) # C, C, C, N
 
-        self.assertSetEqual({1, 21}, set([h_factory.index_mapping.map_hybrid_to_A[hybrid_idx] for hybrid_idx in h_factory.anchor_connectivity_A.keys()]))
-        self.assertTupleEqual(h_factory.anchor_connectivity_A[1]["summary"], ("SP3", 3, 1))
-        self.assertTupleEqual(h_factory.anchor_connectivity_A[21]["summary"], ("SP2", 1, 1))
-        self.assertTupleEqual(h_factory.anchor_connectivity_B[1]["summary"], ("SP3", 3, 1))
-        self.assertTupleEqual(h_factory.anchor_connectivity_B[21]["summary"], ("SP2", 1, 2))
-        print(h_factory.anchor_connectivity_B)
+        self.assertSetEqual({1, 21}, set([hybrid_idx for hybrid_idx in h_factory.anchor_info.keys()]))
+        self.assertEqual(    h_factory.anchor_info[1].hybridization_A, "SP3")
+        self.assertEqual(    h_factory.anchor_info[1].hybridization_B, "SP3")
+        self.assertDictEqual(h_factory.anchor_info[1].unique_A, {39: 'AB'})
+        self.assertDictEqual(h_factory.anchor_info[1].unique_B, {41: 'AB'})
+        self.assertDictEqual(h_factory.anchor_info[1].core, {0: 'AB', 2: 'AB', 3: 'AB'})
+        self.assertSetEqual( h_factory.anchor_info[1].env, set())
+
+        self.assertEqual(    h_factory.anchor_info[21].hybridization_A, "SP2")
+        self.assertEqual(    h_factory.anchor_info[21].hybridization_B, "SP2")
+        self.assertDictEqual(h_factory.anchor_info[21].unique_A, {40: 'AB'})
+        self.assertDictEqual(h_factory.anchor_info[21].unique_B, {41: 'B', 44: 'AB'})
+        self.assertDictEqual(h_factory.anchor_info[21].core, {20: 'AB'})
+        self.assertSetEqual( h_factory.anchor_info[21].env, set())
+
+        print(h_factory.anchor_info)
+
+    def test_hybrid_rest2_hspw_edge_2_3(self):
+        print("\n hsp90 woodhead, break a bond in state A")
+        ligand_path = base / "public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/waterset/hsp90_woodhead/"
+        lig1_path = ligand_path / "ligand_preparation/A03"
+        lig2_path = ligand_path / "ligand_preparation/A04"
+
+        inpcrdA, prmtopA, topA, systemA, rotatable_A = load_ligand(lig1_path / "02_solv.inpcrd",
+                                                             lig1_path / "02_solv.prmtop",
+                                                             lig1_path / f"{lig1_path.name}.sdf")
+        inpcrdB, prmtopB, topB, systemB, rotatable_B = load_ligand(lig2_path / "02_solv.inpcrd",
+                                                             lig2_path / "02_solv.prmtop",
+                                                             lig2_path / f"{lig2_path.name}.sdf")
+        with open(ligand_path / "edge_2_3/mapping_constraint_checked.json") as f:
+            mapping = json.load(f)
+        index_map = hybrid_topology.HybridIndexMapping(topA, topB, {0: mapping})
+
 
 
 

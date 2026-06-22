@@ -1,13 +1,48 @@
 import warnings
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from dataclasses import dataclass
+from typing import NamedTuple
 import math
 
 import numpy as np
-from MDAnalysis.lib.formats.libmdaxdr import namedtuple
 
 from openmm import unit, app, openmm
 from grandfep import hybrid_topology
+
+
+@dataclass
+class AnchorInfo:
+    """Connectivity and hybridization summary for one anchor atom in a hybrid topology.
+
+    An anchor is a core/env atom directly bonded to at least one unique (dummy) atom.
+
+    Attributes
+    ----------
+    hybridization_A, hybridization_B:
+        Hybridization string of the anchor atom in each end state (e.g. "SP3", "SP2").
+    unique_A:
+        ``{index: state}`` for unique_A neighbors.  State is ``"AB"`` unless the
+        anchor–unique_A bond is in ``broken_bonds_A``. If the state is ``"AB"``, extra
+        bonded term will be constructed to make a separable (in partition function)
+        dummy in state B
+    unique_B:
+        ``{index: state}`` for unique_B neighbors.  State is ``"AB"`` unless the
+        anchor–unique_B bond is in ``broken_bonds_B``. If the state is ``"AB"``, extra
+        bonded term will be constructed to make a separable (in partition function)
+        dummy in state A
+    core:
+        ``{index: state}`` for core neighbors, where state is ``"AB"``, ``"A"``,
+        or ``"B"`` depending on which end-state topologies contain the bond.
+    env:
+        Set of hybrid indices of env neighbors.  Asserted to be present in both
+        states at construction time.
+    """
+    hybridization_A: str | None
+    hybridization_B: str | None
+    unique_A: dict   # {int: "A"|"AB"}
+    unique_B: dict   # {int: "B"|"AB"}
+    core: dict       # {int: "AB"|"A"|"B"}
+    env: set
 
 
 # Normal REST2
@@ -1123,6 +1158,11 @@ class HybridRest2TopologyFactoryBase:
         core_env = mapping.core_atoms | mapping.env_atoms
 
         def _build_neighbors(bonds, constraints, index_map):
+            """Build a hybrid-index neighbor graph from one end-state's bonds and constraints.
+
+            index_map translates end-state atom indices to hybrid indices before insertion,
+            so all returned indices are in the hybrid topology's index space.
+            """
             nb: dict[int, set[int]] = defaultdict(set)
             for bond in bonds:
                 h1 = index_map[bond.atoms[0]]
@@ -1136,79 +1176,61 @@ class HybridRest2TopologyFactoryBase:
                 nb[h2].add(h1)
             return nb
 
-        def _anchor_connectivity(anchors, neighbors):
-            result: dict[int, dict[str, list[int]]] = {}
-            for anchor in anchors:
-                lists: dict[str, list[int]] = {"unique_A": [], "unique_B": [], "core": [], "env": []}
-                for nb in neighbors.get(anchor, set()):
-                    if nb in mapping.unique_A_atoms:
-                        lists["unique_A"].append(nb)
-                    elif nb in mapping.unique_B_atoms:
-                        lists["unique_B"].append(nb)
-                    elif nb in mapping.core_atoms:
-                        lists["core"].append(nb)
-                    else:
-                        lists["env"].append(nb)
-                result[anchor] = lists
-            return result
-
-        # State A: unique-A atoms anchored in A's topology
         neighbors_A = _build_neighbors(ms_A.bonds, ms_A.constraints_list, mapping.map_A_to_hybrid)
-        self.anchoring_points_A = {
-            u: {nb for nb in neighbors_A.get(u, set()) if nb in core_env}
-            for u in mapping.unique_A_atoms
-        }
-        all_anchors_A = {a for s in self.anchoring_points_A.values() for a in s}
-        self.anchor_connectivity_A = _anchor_connectivity(all_anchors_A, neighbors_A)
-
-        # State B: unique-B atoms anchored in B's topology
         neighbors_B = _build_neighbors(ms_B.bonds, ms_B.constraints_list, mapping.map_B_to_hybrid)
-        self.anchoring_points_B = {
-            u: {nb for nb in neighbors_B.get(u, set()) if nb in core_env}
-            for u in mapping.unique_B_atoms
-        }
-        all_anchors_B = {a for s in self.anchoring_points_B.values() for a in s}
-        self.anchor_connectivity_B = _anchor_connectivity(all_anchors_B, neighbors_B)
 
-        # Build additional parameters for anchoring points
-        ## For all unique_A connected to real system
-        AnchorSummary = namedtuple("AnchorSummary", ["hybridization", "real_count", "dummy_count"])
-        for center_idx, connection_dict in self.anchor_connectivity_A.items():
-            hybridization = self.molecule_system_A.atoms[center_idx].hybridization
-            real_count = len(connection_dict["env"]) + len(connection_dict["core"])
-            dummy_count = len(connection_dict["unique_A"])
-            connection_dict["summary"] = AnchorSummary(hybridization, real_count, dummy_count)
-            if real_count == 1:
-                # keep all angle
-                pass
-            elif hybridization=="SP3":
-                if real_count + dummy_count == 4:
-                    # build stereo SP3 for each dummy
-                    pass
-                elif real_count + dummy_count == 3:
-                    # build stereo flat for each dummy
-                    pass
-                else:
-                    assert False, f"Impossible {hybridization} anchoring point with {real_count=} + {dummy_count=}"
-            elif hybridization=="SP2":
-                assert real_count == 2
-                assert dummy_count == 1
-                # build stereo flat
-                pass
-            elif hybridization not in ["SP3", "SP2", "SP"]:
-                # keep all angle
-                warnings.warn(f"Unseen hybridization {hybridization=}")
-        # remove interactions across break bond
+        # Collect all anchor atoms: core/env atoms bonded to at least one unique atom.
+        all_anchors: set[int] = set()
+        for u in mapping.unique_A_atoms:
+            all_anchors.update(nb for nb in neighbors_A.get(u, set()) if nb in core_env)
+        for u in mapping.unique_B_atoms:
+            all_anchors.update(nb for nb in neighbors_B.get(u, set()) if nb in core_env)
 
+        broken_A = {frozenset(p) for p in mapping.broken_bonds_A}
+        broken_B = {frozenset(p) for p in mapping.broken_bonds_B}
 
+        self.anchor_info: dict[int, AnchorInfo] = {}
+        for anchor in all_anchors:
+            nbs_A = neighbors_A.get(anchor, set())
+            nbs_B = neighbors_B.get(anchor, set())
 
+            unique_A = {
+                nb: ("A" if frozenset({anchor, nb}) in broken_A else "AB")
+                for nb in nbs_A
+                if nb in mapping.unique_A_atoms
+            }
+            unique_B = {
+                nb: ("B" if frozenset({anchor, nb}) in broken_B else "AB")
+                for nb in nbs_B
+                if nb in mapping.unique_B_atoms
+            }
 
-        ## For all unique_B connected to real system
-        for center_idx, connection_dict in self.anchor_connectivity_B.items():
-            hybridization = self.molecule_system_B.atoms[center_idx].hybridization
-            real_count = len(connection_dict["env"]) + len(connection_dict["core"])
-            dummy_count = len(connection_dict["unique_B"])
-            connection_dict["summary"] = AnchorSummary(hybridization, real_count, dummy_count)
+            core_neighbors = {
+                nb: ("AB" if (nb in nbs_A and nb in nbs_B) else ("A" if nb in nbs_A else "B"))
+                for nb in (nbs_A | nbs_B)
+                if nb in mapping.core_atoms
+            }
+
+            env_neighbors = {nb for nb in (nbs_A | nbs_B) if nb in mapping.env_atoms}
+            for nb in env_neighbors:
+                assert nb in nbs_A and nb in nbs_B, (
+                    f"Env neighbor {nb} of anchor {anchor} missing from one end state "
+                    f"(in_A={nb in nbs_A}, in_B={nb in nbs_B})"
+                )
+
+            idx_A = mapping.map_hybrid_to_A.get(anchor)
+            idx_B = mapping.map_hybrid_to_B.get(anchor)
+            hyb_A = ms_A.atoms[idx_A].hybridization if idx_A is not None else None
+            hyb_B = ms_B.atoms[idx_B].hybridization if idx_B is not None else None
+
+            self.anchor_info[anchor] = AnchorInfo(
+                hybridization_A=hyb_A,
+                hybridization_B=hyb_B,
+                unique_A=unique_A,
+                unique_B=unique_B,
+                core=core_neighbors,
+                env=env_neighbors,
+            )
 
     def _prepare_angle(self):
         pass
