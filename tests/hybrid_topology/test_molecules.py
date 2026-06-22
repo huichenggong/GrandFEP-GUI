@@ -6,7 +6,6 @@ import json
 from collections import namedtuple
 
 import numpy as np
-from mdtraj.core import element
 from rdkit import Chem
 from rdkit.Chem import Lipinski
 
