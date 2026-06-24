@@ -1,0 +1,101 @@
+source leaprc.water.tip3p
+source leaprc.gaff2
+
+MOL = loadmol2 ../00_A06_centered.mol2
+loadamberparams A06.frcmod
+
+water = loadpdb ../02_water.pdb
+SYS = combine { MOL water }
+
+setBOX SYS vdw
+
+addIonsRand SYS Na+ 4 Cl- 5
+
+savepdb       SYS 02_solv.pdb
+saveamberparm SYS 02_solv.prmtop 02_solv.inpcrd
+
+quit
+
+--- stdout ---
+-I: Adding /home/cheng/Software/miniforge3/envs/gfep_gui_dev/dat/leap/prep to search path.
+-I: Adding /home/cheng/Software/miniforge3/envs/gfep_gui_dev/dat/leap/lib to search path.
+-I: Adding /home/cheng/Software/miniforge3/envs/gfep_gui_dev/dat/leap/parm to search path.
+-I: Adding /home/cheng/Software/miniforge3/envs/gfep_gui_dev/dat/leap/cmd to search path.
+-f: Source 02_solv_leap.in.
+
+Welcome to LEaP!
+(no leaprc in search path)
+Sourcing: ./02_solv_leap.in
+----- Source: /home/cheng/Software/miniforge3/envs/gfep_gui_dev/dat/leap/cmd/leaprc.water.tip3p
+----- Source of /home/cheng/Software/miniforge3/envs/gfep_gui_dev/dat/leap/cmd/leaprc.water.tip3p done
+Loading library: /home/cheng/Software/miniforge3/envs/gfep_gui_dev/dat/leap/lib/atomic_ions.lib
+Loading library: /home/cheng/Software/miniforge3/envs/gfep_gui_dev/dat/leap/lib/solvents.lib
+Loading parameters: /home/cheng/Software/miniforge3/envs/gfep_gui_dev/dat/leap/parm/frcmod.tip3p
+Reading force field modification type file (frcmod)
+Reading title:
+This is the additional/replacement parameter set for TIP3P water
+Loading parameters: /home/cheng/Software/miniforge3/envs/gfep_gui_dev/dat/leap/parm/frcmod.ions1lm_126_tip3p
+Reading force field modification type file (frcmod)
+Reading title:
+Li/Merz ion parameters of monovalent ions for TIP3P water model (12-6 normal usage set)
+Loading parameters: /home/cheng/Software/miniforge3/envs/gfep_gui_dev/dat/leap/parm/frcmod.ionsjc_tip3p
+Reading force field modification type file (frcmod)
+Reading title:
+Monovalent ion parameters for Ewald and TIP3P water from Joung & Cheatham JPCB (2008)
+Loading parameters: /home/cheng/Software/miniforge3/envs/gfep_gui_dev/dat/leap/parm/frcmod.ions234lm_126_tip3p
+Reading force field modification type file (frcmod)
+Reading title:
+Li/Merz ion parameters of divalent to tetravalent ions for TIP3P water model (12-6 normal usage set)
+----- Source: /home/cheng/Software/miniforge3/envs/gfep_gui_dev/dat/leap/cmd/leaprc.gaff2
+----- Source of /home/cheng/Software/miniforge3/envs/gfep_gui_dev/dat/leap/cmd/leaprc.gaff2 done
+Log file: ./leap.log
+Loading parameters: /home/cheng/Software/miniforge3/envs/gfep_gui_dev/dat/leap/parm/gaff2.dat
+Reading title:
+AMBER General Force Field for organic molecules (Version 2.2.20, March 2021)
+Loading Mol2 file: ../00_A06_centered.mol2
+Reading MOLECULE named A06
+Loading parameters: ./A06.frcmod
+Reading force field modification type file (frcmod)
+Reading title:
+Remark line goes here
+Loading PDB file: ../02_water.pdb
+  total atoms in file: 4683
+Box dimensions:  44.164600 50.195600 50.518600
+Adding 9 counter ions to "SYS". 1552 solvent molecules will remain.
+0: Placed Na+ in SYS at (-2.20, 13.92, 10.17).
+Placed Cl- in SYS at (9.47, -8.74, -13.85).
+0: Placed Na+ in SYS at (-6.88, 1.60, 17.55).
+Placed Cl- in SYS at (1.98, 17.07, -0.52).
+0: Placed Na+ in SYS at (-12.91, 9.08, -10.08).
+Placed Cl- in SYS at (18.62, -4.84, -3.43).
+0: Placed Na+ in SYS at (-11.34, 11.85, -7.85).
+Placed Cl- in SYS at (8.73, -15.84, -12.48).
+Placed Cl- in SYS at (14.82, -14.42, 3.35).
+Writing pdb file: 02_solv.pdb
+   printing CRYST1 record to PDB file with box info
+Checking Unit.
+Building topology.
+Building atom parameters.
+Building bond parameters.
+Building angle parameters.
+Building proper torsion parameters.
+Building improper torsion parameters.
+ total 18 improper torsions applied
+Building H-Bond parameters.
+Incorporating Non-Bonded adjustments.
+Not Marking per-residue atom chain types.
+Marking per-residue atom chain types.
+  (Residues lacking connect0/connect1 - 
+   these don't have chain types marked:
+
+	res	total affected
+
+	A06	1
+	WAT	1552
+  )
+ (no restraints)
+	Quit
+
+Exiting LEaP: Errors = 0; Warnings = 0; Notes = 0.
+
+--- stderr ---

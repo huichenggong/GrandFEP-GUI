@@ -20,7 +20,6 @@ app/uploads/
 /tests/public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/waterset/urokinase/*
 
 /tests/public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/macrocycles/2E9P_lig4to7_alpha05/*
-/tests/public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/macrocycles/2Q15_lig17to21_alpha05/*
 /tests/public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/macrocycles/3RKZ_lig62to70_alpha05/*
 /tests/public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/macrocycles/ck2_custcore_hotlys/*
 /tests/public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/macrocycles/hsp90_3hvd_custcore/*
