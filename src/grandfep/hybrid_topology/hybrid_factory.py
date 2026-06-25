@@ -1,6 +1,6 @@
 import warnings
 from collections import defaultdict, namedtuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import NamedTuple
 import math
 
@@ -36,6 +36,10 @@ class AnchorInfo:
     env:
         Set of hybrid indices of env neighbors.  Asserted to be present in both
         states at construction time.
+    angle_A, angle_B:
+        ``{frozenset({idx1, idx3}): AnglePotential}`` for angles where this anchor is
+        the center atom, drawn from state A and state B respectively.  Used when
+        constructing dummy-restraint angle terms.
     """
     hybridization_A: str | None
     hybridization_B: str | None
@@ -43,6 +47,21 @@ class AnchorInfo:
     unique_B: dict   # {int: "B"|"AB"}
     core: dict       # {int: "AB"|"A"|"B"}
     env: set
+    angle_A: dict = field(default_factory=dict)  # {frozenset[int]: AnglePotential}
+    angle_B: dict = field(default_factory=dict)  # {frozenset[int]: AnglePotential}
+
+    def get_angle(self, state: str, idx1: int, idx3: int):
+        """Return the AnglePotential for the idx1–anchor–idx3 angle in *state* ("A" or "B").
+
+        Argument order does not matter: get_angle("A", idx1, idx3) ==
+        get_angle("A", idx3, idx1).  Returns None if no such angle exists.
+        """
+        if state == "A":
+            return self.angle_A.get(frozenset({idx1, idx3}))
+        elif state == "B":
+            return self.angle_B.get(frozenset({idx1, idx3}))
+        else:
+            raise ValueError(f"Invalid state '{state}'; must be 'A' or 'B'.")
 
 
 # Normal REST2
@@ -658,10 +677,10 @@ def hybrid_constraint_check(mapping_AB_pair: list,
         if not np.isclose(constraint_B[key_B], c.potential.length0):
             for at_A in (at0_A, at1_A):
                 if ms_A.atoms[at_A].element == "H" and at_A not in to_remove_A:
-                    warnings.warn(
-                        f"Constraint length mismatch for A-atom {at_A} (H): "
-                        f"A={c.potential.length0:.6f} nm, B={constraint_B[key_B]:.6f} nm."
-                    )
+                    # warnings.warn(
+                    #     f"Constraint length mismatch for A-atom {at_A} (H): "
+                    #     f"A={c.potential.length0:.6f} nm, B={constraint_B[key_B]:.6f} nm."
+                    # )
                     to_remove_A.add(at_A)
                     removed_pairs.append((at_A, map_A_to_B[at_A]))
 
@@ -734,9 +753,14 @@ class HybridRest2TopologyFactoryBase:
             self.molecule_system_B.set_hybridization_for_residues(res_id, hyb_list)
 
         self.system = openmm.System()
+        self.anchor_info: dict[int, AnchorInfo] = {}
+        self.dummy_restraint: dict[str, dict[int, dict]] = {
+            "unique_A": {},  # {unique_A_hybrid_idx: {"angles": [AngleTerm, ...], "impropers": [DihedralTerm, ...]}}
+            "unique_B": {},  # {unique_B_hybrid_idx: {"angles": [AngleTerm, ...], "impropers": [DihedralTerm, ...]}}
+        }
         self._prepare_system()                # Add particle, constraint, virtual site, default box vector
         self._prepare_bond()                  # Add Forces for bond
-        self._prepare_dummy_anchoring_point() #
+        self._prepare_dummy_anchoring_point()
         self._prepare_angle()
         self._prepare_dihe()
 
@@ -1176,8 +1200,23 @@ class HybridRest2TopologyFactoryBase:
                 nb[h2].add(h1)
             return nb
 
+        def _build_angle_map(angles, index_map):
+            """Map center hybrid index → {frozenset({terminal1, terminal2}): AnglePotential}.
+
+            atoms[1] is the center; atoms[0] and atoms[2] are the terminals.
+            """
+            result: dict[int, dict] = defaultdict(dict)
+            for term in angles:
+                h0 = index_map[term.atoms[0]]
+                h1 = index_map[term.atoms[1]]  # center
+                h2 = index_map[term.atoms[2]]
+                result[h1][frozenset({h0, h2})] = term.potential
+            return result
+
         neighbors_A = _build_neighbors(ms_A.bonds, ms_A.constraints_list, mapping.map_A_to_hybrid)
         neighbors_B = _build_neighbors(ms_B.bonds, ms_B.constraints_list, mapping.map_B_to_hybrid)
+        angle_map_A = _build_angle_map(ms_A.angles, mapping.map_A_to_hybrid)
+        angle_map_B = _build_angle_map(ms_B.angles, mapping.map_B_to_hybrid)
 
         # Collect all anchor atoms: core/env atoms bonded to at least one unique atom.
         all_anchors: set[int] = set()
@@ -1189,7 +1228,6 @@ class HybridRest2TopologyFactoryBase:
         broken_A = {frozenset(p) for p in mapping.broken_bonds_A}
         broken_B = {frozenset(p) for p in mapping.broken_bonds_B}
 
-        self.anchor_info: dict[int, AnchorInfo] = {}
         for anchor in all_anchors:
             nbs_A = neighbors_A.get(anchor, set())
             nbs_B = neighbors_B.get(anchor, set())
@@ -1230,10 +1268,237 @@ class HybridRest2TopologyFactoryBase:
                 unique_B=unique_B,
                 core=core_neighbors,
                 env=env_neighbors,
+                angle_A=dict(angle_map_A.get(anchor, {})),
+                angle_B=dict(angle_map_B.get(anchor, {})),
             )
 
+        # now we have the information for each anchoring point, we build extra restraint for each dummy on the anchor
+        # All angle with dummy-anchor-real will be alchemically turned off
+        # Depend on the anchor connectivity, either we add back the angle or add 1 angle + 1 improper dihe to restrain stereochemistry
+        for idx_anchor, anchor in self.anchor_info.items():
+            n_core_env_A = sum(["A" in at_state for at_state in anchor.core.values()]) + len(anchor.env)
+            n_core_env_B = sum(["B" in at_state for at_state in anchor.core.values()]) + len(anchor.env)
+            n_unique_A = len(anchor.unique_A)
+            n_unique_B = len(anchor.unique_B)
+
+            # unique_A atoms in state B
+            if n_core_env_B == 1:
+                # only 1 real reference atom — keep every angle involving each non-broken unique_A
+                for u, state in anchor.unique_A.items():
+                    if state != "AB":
+                        continue
+                    angles = [
+                        hybrid_topology.AngleTerm(atoms=(u, idx_anchor, other), potential=pot)
+                        for terminals, pot in anchor.angle_A.items()
+                        if u in terminals
+                        for other in terminals - {u}
+                    ]
+                    if angles:
+                        self.dummy_restraint["unique_A"].setdefault(u, {"angles": [], "impropers": []})["angles"].extend(angles)
+            elif anchor.hybridization_A in ("SP3", "SP2"):
+                core_env_A = sorted({nb for nb, st in anchor.core.items() if "A" in st} | anchor.env)
+                ref1, ref2 = core_env_A[0], core_env_A[1]
+                use_sp3_stereo = (anchor.hybridization_A == "SP3") and (n_core_env_A + n_unique_A == 4)
+                for u, state in anchor.unique_A.items():
+                    if state != "AB":
+                        continue
+                    angle_pot = anchor.get_angle("A", u, ref1)
+                    if use_sp3_stereo:
+                        phi0 = sp3_stereo_solver(anchor.get_angle("A", ref1, ref2).theta0, angle_pot.theta0)
+                    else:
+                        phi0 = math.pi
+                    entry = self.dummy_restraint["unique_A"].setdefault(u, {"angles": [], "impropers": []})
+                    entry["angles"].append(hybrid_topology.AngleTerm(atoms=(u, idx_anchor, ref1), potential=angle_pot))
+                    entry["impropers"].append(hybrid_topology.DihedralTerm(
+                        atoms=(ref1, ref2, idx_anchor, u),
+                        potential=hybrid_topology.DihedralPotential(
+                            functional_form="harmonic_improper",
+                            parameters={"k": angle_pot.k, "phase": phi0},
+                        ),
+                    ))
+            else:
+                raise ValueError(f"Unexpected hybridization '{anchor.hybridization_A}' at anchor {idx_anchor}")
+
+            # unique_B atoms in state A
+            if n_core_env_A == 1:
+                # only 1 real reference atom — keep every angle involving each non-broken unique_B
+                for u, state in anchor.unique_B.items():
+                    if state != "AB":
+                        continue
+                    angles = [
+                        hybrid_topology.AngleTerm(atoms=(u, idx_anchor, other), potential=pot)
+                        for terminals, pot in anchor.angle_B.items()
+                        if u in terminals
+                        for other in terminals - {u}
+                    ]
+                    if angles:
+                        self.dummy_restraint["unique_B"].setdefault(u, {"angles": [], "impropers": []})["angles"].extend(angles)
+            elif anchor.hybridization_B in ("SP3", "SP2"):
+                core_env_B = sorted({nb for nb, st in anchor.core.items() if "B" in st} | anchor.env)
+                ref1, ref2 = core_env_B[0], core_env_B[1]
+                use_sp3_stereo = (anchor.hybridization_B == "SP3") and (n_core_env_B + n_unique_B == 4)
+                for u, state in anchor.unique_B.items():
+                    if state != "AB":
+                        continue
+                    angle_pot = anchor.get_angle("B", u, ref1)
+                    if use_sp3_stereo:
+                        phi0 = sp3_stereo_solver(anchor.get_angle("B", ref1, ref2).theta0, angle_pot.theta0)
+                    else:
+                        phi0 = math.pi
+                    entry = self.dummy_restraint["unique_B"].setdefault(u, {"angles": [], "impropers": []})
+                    entry["angles"].append(hybrid_topology.AngleTerm(atoms=(u, idx_anchor, ref1), potential=angle_pot))
+                    entry["impropers"].append(hybrid_topology.DihedralTerm(
+                        atoms=(ref1, ref2, idx_anchor, u),
+                        potential=hybrid_topology.DihedralPotential(
+                            functional_form="harmonic_improper",
+                            parameters={"k": angle_pot.k, "phase": phi0},
+                        ),
+                    ))
+            else:
+                raise ValueError(f"Unexpected hybridization '{anchor.hybridization_B}' at anchor {idx_anchor}")
+
     def _prepare_angle(self):
-        pass
+        """
+        Prepare angle terms for the hybrid topology. env-env-env goes to HarmonicAngleForce,
+        anything else goes to CustomAngleForce (lambda_angle: 0=state A, 1=state B).
+
+        CustomAngleForce per-angle params: theta0, k0, theta1, k1.
+        - unique_A-(env/core) angles: k1=0 (turn off in B); dummy_restraint adds k0=0 entry (turn on).
+        - unique_B-(env/core) angles: k0=0 (turn on in B); dummy_restraint adds k1=0 entry (turn off).
+        - n_unique >= 2 angles: k0=k1 (keep identical in both states).
+        - core/env angles: interpolate A->B parameters.
+        - Two extra CustomAngleForce for broken-bond angles (lambda_angle_A / lambda_angle_B).
+        """
+        mapping = self.index_mapping
+        ms_A    = self.molecule_system_A
+        ms_B    = self.molecule_system_B
+
+        broken_A = {(min(a, b), max(a, b)) for a, b in mapping.broken_bonds_A}
+        broken_B = {(min(a, b), max(a, b)) for a, b in mapping.broken_bonds_B}
+
+        dr_A = self.dummy_restraint["unique_A"]
+        dr_B = self.dummy_restraint["unique_B"]
+        dr_A_keep = {u for u, e in dr_A.items() if not e["impropers"]}
+        dr_B_keep = {u for u, e in dr_B.items() if not e["impropers"]}
+
+        def _angles_to_hybrid(angles, index_map):
+            """Map end-state angles to hybrid indices: {(center_h, frozenset({t1,t2})): potential}."""
+            result = {}
+            for term in angles:
+                h0 = index_map[term.atoms[0]]
+                h1 = index_map[term.atoms[1]]
+                h2 = index_map[term.atoms[2]]
+                result[(h1, frozenset({h0, h2}))] = term.potential
+            return result
+
+        angles_A = _angles_to_hybrid(ms_A.angles, mapping.map_A_to_hybrid)
+        angles_B = _angles_to_hybrid(ms_B.angles, mapping.map_B_to_hybrid)
+
+        h_force = openmm.HarmonicAngleForce()
+
+        c_h_force = openmm.CustomAngleForce(
+            "0.5 * ((1 - lambda_angle)*k0 + lambda_angle*k1)"
+            " * (theta - ((1 - lambda_angle)*theta0 + lambda_angle*theta1))^2"
+        )
+        c_h_force.setName("CustomAngleForce")
+        c_h_force.addGlobalParameter("lambda_angle", 0.0)
+        for p in ("theta0", "k0", "theta1", "k1"):
+            c_h_force.addPerAngleParameter(p)
+
+        c_s_A_force = openmm.CustomAngleForce(
+            "0.5 * lambda_angle_A * k * (theta - theta0)^2"
+        )
+        c_s_A_force.setName("CustomAngleForce_A")
+        c_s_A_force.addGlobalParameter("lambda_angle_A", 1.0)
+        c_s_A_force.addPerAngleParameter("theta0")
+        c_s_A_force.addPerAngleParameter("k")
+
+        c_s_B_force = openmm.CustomAngleForce(
+            "0.5 * lambda_angle_B * k * (theta - theta0)^2"
+        )
+        c_s_B_force.setName("CustomAngleForce_B")
+        c_s_B_force.addGlobalParameter("lambda_angle_B", 0.0)
+        c_s_B_force.addPerAngleParameter("theta0")
+        c_s_B_force.addPerAngleParameter("k")
+
+        # ── Pass 1: A-state angles ────────────────────────────────────────────
+        for (h1, terminals), pot_A in angles_A.items():
+            t0, t2 = tuple(terminals)
+            n_uA = sum(mapping.atom_identity[a] == "unique_A" for a in (t0, h1, t2))
+            n_uB = sum(mapping.atom_identity[a] == "unique_B" for a in (t0, h1, t2))
+            assert n_uB == 0, f"A-state angle {t0}-{h1}-{t2} contains unique_B atom"
+
+            bond0 = (min(t0, h1), max(t0, h1))
+            bond2 = (min(h1, t2), max(h1, t2))
+
+            if bond0 in broken_A or bond2 in broken_A:
+                c_s_A_force.addAngle(t0, h1, t2, [pot_A.theta0, pot_A.k])
+            elif all(mapping.atom_identity[a] == "env" for a in (t0, h1, t2)):
+                h_force.addAngle(t0, h1, t2, pot_A.theta0, pot_A.k)
+            elif n_uA >= 2:
+                c_h_force.addAngle(t0, h1, t2, [pot_A.theta0, pot_A.k, pot_A.theta0, pot_A.k])
+            elif n_uA == 1:
+                u = next(a for a in (t0, h1, t2) if mapping.atom_identity[a] == "unique_A")
+                if u in dr_A_keep:
+                    c_h_force.addAngle(t0, h1, t2, [pot_A.theta0, pot_A.k, pot_A.theta0, pot_A.k])
+                else:
+                    c_h_force.addAngle(t0, h1, t2, [pot_A.theta0, pot_A.k, pot_A.theta0, 0.0])
+            else:
+                pot_B = angles_B.get((h1, terminals))
+                if pot_B is not None:
+                    c_h_force.addAngle(t0, h1, t2, [pot_A.theta0, pot_A.k, pot_B.theta0, pot_B.k])
+                else:
+                    c_h_force.addAngle(t0, h1, t2, [pot_A.theta0, pot_A.k, pot_A.theta0, 0.0])
+
+        # ── Pass 2: B-state angles ────────────────────────────────────────────
+        for (h1, terminals), pot_B in angles_B.items():
+            t0, t2 = tuple(terminals)
+            n_uA = sum(mapping.atom_identity[a] == "unique_A" for a in (t0, h1, t2))
+            n_uB = sum(mapping.atom_identity[a] == "unique_B" for a in (t0, h1, t2))
+            assert n_uA == 0, f"B-state angle {t0}-{h1}-{t2} contains unique_A atom"
+
+            bond0 = (min(t0, h1), max(t0, h1))
+            bond2 = (min(h1, t2), max(h1, t2))
+
+            if bond0 in broken_B or bond2 in broken_B:
+                c_s_B_force.addAngle(t0, h1, t2, [pot_B.theta0, pot_B.k])
+            elif all(mapping.atom_identity[a] == "env" for a in (t0, h1, t2)):
+                pass  # already in h_force from pass 1
+            elif n_uB >= 2:
+                c_h_force.addAngle(t0, h1, t2, [pot_B.theta0, pot_B.k, pot_B.theta0, pot_B.k])
+            elif n_uB == 1:
+                u = next(a for a in (t0, h1, t2) if mapping.atom_identity[a] == "unique_B")
+                if u in dr_B_keep:
+                    c_h_force.addAngle(t0, h1, t2, [pot_B.theta0, pot_B.k, pot_B.theta0, pot_B.k])
+                else:
+                    c_h_force.addAngle(t0, h1, t2, [pot_B.theta0, 0.0, pot_B.theta0, pot_B.k])
+            else:
+                if (h1, terminals) not in angles_A:
+                    # B-only core/env angle
+                    c_h_force.addAngle(t0, h1, t2, [pot_B.theta0, 0.0, pot_B.theta0, pot_B.k])
+
+        # ── Dummy restraint angles (stereo cases only) ────────────────────────
+        # unique_A dummy in state B: restraint turns on at lambda=1
+        for u, entry in dr_A.items():
+            if entry["impropers"]:
+                for ang in entry["angles"]:
+                    a0, a1, a2 = ang.atoms
+                    pot = ang.potential
+                    c_h_force.addAngle(a0, a1, a2, [pot.theta0, 0.0, pot.theta0, pot.k])
+
+        # unique_B dummy in state A: restraint turns on at lambda=0
+        for u, entry in dr_B.items():
+            if entry["impropers"]:
+                for ang in entry["angles"]:
+                    a0, a1, a2 = ang.atoms
+                    pot = ang.potential
+                    c_h_force.addAngle(a0, a1, a2, [pot.theta0, pot.k, pot.theta0, 0.0])
+
+        # ── Add forces ────────────────────────────────────────────────────────
+        self.system.addForce(h_force)
+        self.system.addForce(c_h_force)
+        self.system.addForce(c_s_A_force)
+        self.system.addForce(c_s_B_force)
 
     def _prepare_dihe(self):
         pass

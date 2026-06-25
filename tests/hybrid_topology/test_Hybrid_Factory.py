@@ -99,7 +99,7 @@ class MyTestCase(unittest.TestCase):
             systemB, inpcrdB.positions, rotatable_B,
             index_map
         )
-        print("## Bonded")
+        print("## Bond")
         energyA, forceA = calc_energy_force(
             separate_force(systemA, ["HarmonicBondForce"]),
             topA, inpcrdA.positions)
@@ -128,7 +128,56 @@ class MyTestCase(unittest.TestCase):
         all_close, _, error_msg = match_force(forceB, forceH1[reorder_h_2_B])
         self.assertTrue(all_close, "Bonded term state B " + error_msg)
 
-        print(h_factory.anchor_info)
+        print("## Bond, Angle")
+        sys_A_bond_angle = separate_force(systemA, ["HarmonicBondForce", "HarmonicAngleForce",])
+        sys_B_bond_angle = separate_force(systemB, ["HarmonicBondForce", "HarmonicAngleForce"])
+        sys_hyb_bond_angle = separate_force(h_factory.system, ["HarmonicBondForce", "CustomBondForce",
+                                                               "CustomBondForce_h", "CustomBondForce_s_A", "CustomBondForce_s_B",
+                                                               "HarmonicAngleForce", "CustomAngleForce",
+                                                               "CustomAngleForce_A", "CustomAngleForce_B"])
+        platform = openmm.Platform.getPlatform('Reference')
+
+        # optimize the coordinate with h_factory.system in state A and compare forces for state A
+        print("### State A")
+        integrator_A = openmm.LangevinIntegrator(300 * unit.kelvin, 1.0 / unit.picosecond, 2.0 * unit.femtosecond)
+        sim_A = app.Simulation(h_factory.index_mapping.hybrid_top, h_factory.system, integrator_A, platform)
+        sim_A.context.setPositions(h_factory.get_hybrid_position(0))
+        sim_A.minimizeEnergy()
+        state_A = sim_A.context.getState(getPositions=True, getEnergy=True)
+        pos_opt_A = state_A.getPositions()
+        with open("/tmp/hybrid_opt_stateA.pdb", "w") as f:
+            app.PDBFile.writeFile(h_factory.index_mapping.hybrid_top, pos_opt_A, f)
+        pos_A_opt = [pos_opt_A[h_factory.index_mapping.map_A_to_hybrid[i]] for i in range(systemA.getNumParticles())]
+        energyA_ba, forceA_ba = calc_energy_force(sys_A_bond_angle, topA, pos_A_opt)
+        energyH_A, forceH_A = calc_energy_force(sys_hyb_bond_angle, h_factory.index_mapping.hybrid_top, pos_opt_A)
+        
+        # self.assertAlmostEqual(energyH_A, energyA_ba)
+        all_close, _, error_msg = match_force(forceA_ba, forceH_A[reorder_h_2_A])
+        self.assertTrue(all_close, "Bond+Angle state A \n" + error_msg)
+
+        # optimize the coordinate with h_factory.system in state B and compare forces for state B
+        print("### State B")
+
+
+
+
+
+
+
+    def test_hybrid_rest2_macrocycle_2Q15_0_4_improper(self):
+        print("\n macrocycle, bond breaking with improper dihedral")
+        ligand_path = base / "public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/macrocycles/2Q15_lig17to21_alpha05/"
+        lig1_path = ligand_path / "ligand_preparation/A01"
+        lig2_path = ligand_path / "ligand_preparation/A05"
+
+        inpcrdA, prmtopA, topA, systemA, rotatable_A = load_ligand(lig1_path / "02_solv.inpcrd",
+                                                                   lig1_path / "02_solv.prmtop",
+                                                                   lig1_path / f"{lig1_path.name}.sdf")
+        inpcrdB, prmtopB, topB, systemB, rotatable_B = load_ligand(lig2_path / "02_solv.inpcrd",
+                                                                   lig2_path / "02_solv.prmtop",
+                                                                   lig2_path / f"{lig2_path.name}.sdf")
+        with open(ligand_path / "edge_0_4/mapping_visial_checked.json") as f:
+            mapping = json.load(f)
 
     def test_hybrid_rest2_hspw_edge_1_0(self):
         print("\n hsp90 woodhead, break a bond in state B")
@@ -142,7 +191,7 @@ class MyTestCase(unittest.TestCase):
         inpcrdB, prmtopB, topB, systemB, rotatable_B = load_ligand(lig2_path / "02_solv.inpcrd",
                                                              lig2_path / "02_solv.prmtop",
                                                              lig2_path / f"{lig2_path.name}.sdf")
-        with open(ligand_path / "edge_1_0/mapping_constraint_checked.json") as f:
+        with open(ligand_path / "edge_1_0/mapping_visial_checked.json") as f:
             mapping = json.load(f)
         index_map = hybrid_topology.HybridIndexMapping(topA, topB, {0: mapping})
         self.assertListEqual(["SP3", "SP3", "SP2", "SP2", "SP2"], [index_map.hybridization["A"][0][idx] for idx in [1, 2, 3, 4, 5]])
@@ -166,6 +215,8 @@ class MyTestCase(unittest.TestCase):
         self.assertDictEqual(h_factory.anchor_info[1].unique_B, {41: 'AB'})
         self.assertDictEqual(h_factory.anchor_info[1].core, {0: 'AB', 2: 'AB', 3: 'AB'})
         self.assertSetEqual( h_factory.anchor_info[1].env, set())
+        self.assertEqual(len(h_factory.anchor_info[1].angle_A), 6)
+        self.assertEqual(len(h_factory.anchor_info[1].angle_B), 6)
 
         self.assertEqual(    h_factory.anchor_info[21].hybridization_A, "SP2")
         self.assertEqual(    h_factory.anchor_info[21].hybridization_B, "SP2")
@@ -173,8 +224,11 @@ class MyTestCase(unittest.TestCase):
         self.assertDictEqual(h_factory.anchor_info[21].unique_B, {41: 'B', 44: 'AB'})
         self.assertDictEqual(h_factory.anchor_info[21].core, {20: 'AB'})
         self.assertSetEqual( h_factory.anchor_info[21].env, set())
+        self.assertEqual(len(h_factory.anchor_info[21].angle_A), 1)
+        self.assertEqual(len(h_factory.anchor_info[21].angle_B), 3)
 
-        print(h_factory.anchor_info)
+
+        # print(h_factory.anchor_info)
 
     def test_hybrid_rest2_hspw_edge_2_3(self):
         print("\n hsp90 woodhead, break a bond in state A")
@@ -188,7 +242,7 @@ class MyTestCase(unittest.TestCase):
         inpcrdB, prmtopB, topB, systemB, rotatable_B = load_ligand(lig2_path / "02_solv.inpcrd",
                                                              lig2_path / "02_solv.prmtop",
                                                              lig2_path / f"{lig2_path.name}.sdf")
-        with open(ligand_path / "edge_2_3/mapping_constraint_checked.json") as f:
+        with open(ligand_path / "edge_2_3/mapping_visial_checked.json") as f:
             mapping = json.load(f)
         index_map = hybrid_topology.HybridIndexMapping(topA, topB, {0: mapping})
 
