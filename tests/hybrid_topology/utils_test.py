@@ -64,6 +64,10 @@ def separate_force(system, force_name: list, ):
         particle_mass = system.getParticleMass(particle_idx)
         sys_new.addParticle(particle_mass)
 
+    for i in range(system.getNumConstraints()):
+        p1, p2, length = system.getConstraintParameters(i)
+        sys_new.addConstraint(p1, p2, length)
+
     for f in system.getForces():
         if f.getName() in force_name:
             sys_new.addForce(copy.deepcopy(f))

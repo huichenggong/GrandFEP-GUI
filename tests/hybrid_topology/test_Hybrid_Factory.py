@@ -76,20 +76,16 @@ class MyTestCase(unittest.TestCase):
     def test_hybrid_rest2_macrocycles_2B8V(self):
         print("\n# Macrocycle 2B8V")
         ligand_path = base / "public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/macrocycles/2B8V_lig24and25_alpha05/"
+
         lig1_path = ligand_path / "ligand_preparation/A01"
         lig2_path = ligand_path / "ligand_preparation/A02"
-        inpcrdA, prmtopA, systemA = utils.load_amber_sys(
-            lig1_path / "02_solv.inpcrd",
-            lig1_path / "02_solv.prmtop",
-        )
-        topA = prmtopA.topology
-        rotatable_A = get_rotatable_bond_from_sdf(lig1_path / f"{lig1_path.name}.sdf")
-        inpcrdB, prmtopB, systemB = utils.load_amber_sys(
-            lig2_path / "02_solv.inpcrd",
-            lig2_path / "02_solv.prmtop",
-        )
-        topB = prmtopB.topology
-        rotatable_B = get_rotatable_bond_from_sdf(lig2_path / f"{lig2_path.name}.sdf")
+
+        inpcrdA, prmtopA, topA, systemA, rotatable_A = load_ligand(lig1_path / "02_solv.inpcrd",
+                                                                   lig1_path / "02_solv.prmtop",
+                                                                   lig1_path / f"{lig1_path.name}.sdf")
+        inpcrdB, prmtopB, topB, systemB, rotatable_B = load_ligand(lig2_path / "02_solv.inpcrd",
+                                                                   lig2_path / "02_solv.prmtop",
+                                                                   lig2_path / f"{lig2_path.name}.sdf")
         with open(ligand_path / "edge_0_1/mapping_visial_checked.json") as f:
             mapping = json.load(f)
 
@@ -129,18 +125,25 @@ class MyTestCase(unittest.TestCase):
         self.assertTrue(all_close, "Bonded term state B " + error_msg)
 
         print("## Bond, Angle")
-        sys_A_bond_angle = separate_force(systemA, ["HarmonicBondForce", "HarmonicAngleForce",])
-        sys_B_bond_angle = separate_force(systemB, ["HarmonicBondForce", "HarmonicAngleForce"])
-        sys_hyb_bond_angle = separate_force(h_factory.system, ["HarmonicBondForce", "CustomBondForce",
-                                                               "CustomBondForce_h", "CustomBondForce_s_A", "CustomBondForce_s_B",
-                                                               "HarmonicAngleForce", "CustomAngleForce",
-                                                               "CustomAngleForce_A", "CustomAngleForce_B"])
+        sys_A_bond_angle = separate_force(systemA,
+                                          ["HarmonicBondForce"]
+                                          + ["HarmonicAngleForce"]
+                                          )
+        sys_B_bond_angle = separate_force(systemB,
+                                          ["HarmonicBondForce"]
+                                          + ["HarmonicAngleForce"]
+                                          )
+        sys_hyb_bond_angle = separate_force(h_factory.system,
+                                            ["HarmonicBondForce", "CustomBondForce",
+                                            "CustomBondForce_h", "CustomBondForce_s_A", "CustomBondForce_s_B"]
+                                            + ["HarmonicAngleForce", "CustomAngleForce", "CustomAngleForce_A", "CustomAngleForce_B"]
+                                            )
         platform = openmm.Platform.getPlatform('Reference')
 
         # optimize the coordinate with h_factory.system in state A and compare forces for state A
         print("### State A")
         integrator_A = openmm.LangevinIntegrator(300 * unit.kelvin, 1.0 / unit.picosecond, 2.0 * unit.femtosecond)
-        sim_A = app.Simulation(h_factory.index_mapping.hybrid_top, h_factory.system, integrator_A, platform)
+        sim_A = app.Simulation(h_factory.index_mapping.hybrid_top, sys_hyb_bond_angle, integrator_A, platform)
         sim_A.context.setPositions(h_factory.get_hybrid_position(0))
         sim_A.minimizeEnergy()
         state_A = sim_A.context.getState(getPositions=True, getEnergy=True)
@@ -151,12 +154,56 @@ class MyTestCase(unittest.TestCase):
         energyA_ba, forceA_ba = calc_energy_force(sys_A_bond_angle, topA, pos_A_opt)
         energyH_A, forceH_A = calc_energy_force(sys_hyb_bond_angle, h_factory.index_mapping.hybrid_top, pos_opt_A)
         
-        # self.assertAlmostEqual(energyH_A, energyA_ba)
-        all_close, _, error_msg = match_force(forceA_ba, forceH_A[reorder_h_2_A])
+        # atoms 10,11,12,13 are the anchors (11,12) and ref1 atoms (10,13) of the
+        # unique_B stereo restraint angles. At state A the restraints are active
+        # (k0>0) but absent in sys_A_bond_angle, so their forces cannot match.
+        unique_B_anchor_ref = [10, 11, 12, 13]
+        all_close, _, error_msg = match_force(forceA_ba, forceH_A[reorder_h_2_A],
+                                              excluded_list=unique_B_anchor_ref)
         self.assertTrue(all_close, "Bond+Angle state A \n" + error_msg)
 
         # optimize the coordinate with h_factory.system in state B and compare forces for state B
         print("### State B")
+        integrator_B = openmm.LangevinIntegrator(300 * unit.kelvin, 1.0 / unit.picosecond, 2.0 * unit.femtosecond)
+        sim_B = app.Simulation(h_factory.index_mapping.hybrid_top, sys_hyb_bond_angle, integrator_B, platform)
+        sim_B.context.setPositions(h_factory.get_hybrid_position(1))
+        sim_B.context.setParameter("lambda_bonds",   1.0)
+        sim_B.context.setParameter("lambda_bonds_A", 0.0)
+        sim_B.context.setParameter("lambda_bonds_B", 1.0)
+        sim_B.context.setParameter("lambda_angle",   1.0)
+        sim_B.context.setParameter("lambda_angle_A", 0.0)
+        sim_B.context.setParameter("lambda_angle_B", 1.0)
+        sim_B.minimizeEnergy()
+        state_B = sim_B.context.getState(getPositions=True, getEnergy=True)
+        pos_opt_B = state_B.getPositions()
+        pos_B_opt = [pos_opt_B[h_factory.index_mapping.map_B_to_hybrid[i]] for i in range(systemB.getNumParticles())]
+        energyB_ba, forceB_ba = calc_energy_force(sys_B_bond_angle, topB, pos_B_opt)
+        energyH_B, forceH_B   = calc_energy_force(sys_hyb_bond_angle, h_factory.index_mapping.hybrid_top, pos_opt_B,
+                                                   global_parameters={"lambda_bonds": 1.0, "lambda_bonds_A": 0.0,
+                                                                       "lambda_bonds_B": 1.0, "lambda_angle": 1.0,
+                                                                       "lambda_angle_A": 0.0, "lambda_angle_B": 1.0})
+        # No unique_A atoms in this test, so no active restraints at state B; no exclusions needed.
+        all_close, _, error_msg = match_force(forceB_ba, forceH_B[reorder_h_2_B])
+        self.assertTrue(all_close, "Bond+Angle state B \n" + error_msg)
+
+        print("### Newton's 3rd law for unique_B restraint angles at state A")
+        # For each restraint angle (u, anchor, ref1) added to c_h_force:
+        #   force[u] + force_diff[anchor] + force_diff[ref1] = 0
+        # where force_diff = forceH_A[hybrid] - forceA_ba[A-local].
+        # This must hold exactly regardless of minimization completeness.
+        for u_h, entry in h_factory.dummy_restraint["unique_B"].items():
+            for ang in entry["angles"]:
+                _, anchor_h, ref1_h = ang.atoms  # (u, anchor, ref1) in hybrid indices
+                anchor_a = h_factory.index_mapping.map_hybrid_to_A[anchor_h]
+                ref1_a   = h_factory.index_mapping.map_hybrid_to_A[ref1_h]
+                f_u      = forceH_A[u_h]
+                f_diff_anchor = forceH_A[anchor_h] - forceA_ba[anchor_a]
+                f_diff_ref1   = forceH_A[ref1_h]   - forceA_ba[ref1_a]
+                f_sum = f_u + f_diff_anchor + f_diff_ref1
+                self.assertTrue(
+                    np.allclose(f_sum, np.zeros(3)),
+                    f"Restraint angle force sum != 0 for u={u_h}, anchor={anchor_h}, ref1={ref1_h}: {f_sum}"
+                )
 
 
 
