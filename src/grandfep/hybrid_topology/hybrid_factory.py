@@ -1405,21 +1405,21 @@ class HybridRest2TopologyFactoryBase:
         for p in ("theta0", "k0", "theta1", "k1"):
             c_h_force.addPerAngleParameter(p)
 
-        c_s_A_force = openmm.CustomAngleForce(
+        c_A_force = openmm.CustomAngleForce(
             "0.5 * lambda_angle_A * k * (theta - theta0)^2"
         )
-        c_s_A_force.setName("CustomAngleForce_A")
-        c_s_A_force.addGlobalParameter("lambda_angle_A", 1.0)
-        c_s_A_force.addPerAngleParameter("theta0")
-        c_s_A_force.addPerAngleParameter("k")
+        c_A_force.setName("CustomAngleForce_A")
+        c_A_force.addGlobalParameter("lambda_angle_A", 1.0)
+        c_A_force.addPerAngleParameter("theta0")
+        c_A_force.addPerAngleParameter("k")
 
-        c_s_B_force = openmm.CustomAngleForce(
+        c_B_force = openmm.CustomAngleForce(
             "0.5 * lambda_angle_B * k * (theta - theta0)^2"
         )
-        c_s_B_force.setName("CustomAngleForce_B")
-        c_s_B_force.addGlobalParameter("lambda_angle_B", 0.0)
-        c_s_B_force.addPerAngleParameter("theta0")
-        c_s_B_force.addPerAngleParameter("k")
+        c_B_force.setName("CustomAngleForce_B")
+        c_B_force.addGlobalParameter("lambda_angle_B", 0.0)
+        c_B_force.addPerAngleParameter("theta0")
+        c_B_force.addPerAngleParameter("k")
 
         # ── Pass 1: A-state angles ────────────────────────────────────────────
         for (h1, terminals), pot_A in angles_A.items():
@@ -1432,7 +1432,7 @@ class HybridRest2TopologyFactoryBase:
             bond2 = (min(h1, t2), max(h1, t2))
 
             if bond0 in broken_A or bond2 in broken_A:
-                c_s_A_force.addAngle(t0, h1, t2, [pot_A.theta0, pot_A.k])
+                c_A_force.addAngle(t0, h1, t2, [pot_A.theta0, pot_A.k])
             elif all(mapping.atom_identity[a] == "env" for a in (t0, h1, t2)):
                 h_force.addAngle(t0, h1, t2, pot_A.theta0, pot_A.k)
             elif n_uA >= 2:
@@ -1461,7 +1461,7 @@ class HybridRest2TopologyFactoryBase:
             bond2 = (min(h1, t2), max(h1, t2))
 
             if bond0 in broken_B or bond2 in broken_B:
-                c_s_B_force.addAngle(t0, h1, t2, [pot_B.theta0, pot_B.k])
+                c_B_force.addAngle(t0, h1, t2, [pot_B.theta0, pot_B.k])
             elif all(mapping.atom_identity[a] == "env" for a in (t0, h1, t2)):
                 pass  # already in h_force from pass 1
             elif n_uB >= 2:
@@ -1497,8 +1497,8 @@ class HybridRest2TopologyFactoryBase:
         # ── Add forces ────────────────────────────────────────────────────────
         self.system.addForce(h_force)
         self.system.addForce(c_h_force)
-        self.system.addForce(c_s_A_force)
-        self.system.addForce(c_s_B_force)
+        self.system.addForce(c_A_force)
+        self.system.addForce(c_B_force)
 
     def _prepare_dihe(self):
         pass

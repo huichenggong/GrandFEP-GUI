@@ -52,6 +52,49 @@ def match_force(force1, force2, excluded_list = None):
     error_msg = "".join([f"{at}\n    {f1}\n    {f2}\n" for at, f1, f2 in mis_match_list])
     return all_close_flag, mis_match_list, error_msg
 
+def find_term_in_force(system, force_name: str, idx: int) -> list:
+    """
+    Find all entries in a named force that involve atom *idx*.
+
+    Parameters
+    ----------
+    system     : openmm.System
+    force_name : name of the force as returned by force.getName()
+    idx        : atom index to search for
+
+    Returns
+    -------
+    List of parameter tuples returned by the corresponding get*Parameters()
+    call (atom indices are always the leading elements of each tuple).
+
+    Supported force classes
+    -----------------------
+    HarmonicBondForce, CustomBondForce
+    HarmonicAngleForce, CustomAngleForce
+    PeriodicTorsionForce, CustomTorsionForce
+    """
+    _dispatch = {
+        openmm.HarmonicBondForce:    (2, lambda f: [f.getBondParameters(i)    for i in range(f.getNumBonds())]),
+        openmm.CustomBondForce:      (2, lambda f: [f.getBondParameters(i)    for i in range(f.getNumBonds())]),
+        openmm.HarmonicAngleForce:   (3, lambda f: [f.getAngleParameters(i)   for i in range(f.getNumAngles())]),
+        openmm.CustomAngleForce:     (3, lambda f: [f.getAngleParameters(i)   for i in range(f.getNumAngles())]),
+        openmm.PeriodicTorsionForce: (4, lambda f: [f.getTorsionParameters(i) for i in range(f.getNumTorsions())]),
+        openmm.CustomTorsionForce:   (4, lambda f: [f.getTorsionParameters(i) for i in range(f.getNumTorsions())]),
+    }
+    results = []
+    for force in system.getForces():
+        if force.getName() != force_name:
+            continue
+        handler = _dispatch.get(type(force))
+        if handler is None:
+            raise ValueError(f"find_term_in_force: unsupported force class {type(force).__name__!r}")
+        n_atoms, iter_fn = handler
+        for entry in iter_fn(force):
+            if idx in entry[:n_atoms]:
+                results.append(entry)
+    return results
+
+
 def separate_force(system, force_name: list, ):
     """
     Create a new system and only keep certain force

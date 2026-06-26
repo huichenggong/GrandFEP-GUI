@@ -11,7 +11,7 @@ from rdkit.Chem import Lipinski
 from openmm import app, unit, openmm
 from grandfep import utils, hybrid_topology
 
-from utils_test import calc_energy_force, match_force, separate_force
+from utils_test import calc_energy_force, match_force, separate_force, find_term_in_force
 
 
 
@@ -305,6 +305,24 @@ class MyTestCase(unittest.TestCase):
 
 
         check_bond_angle(h_factory, systemA, topA, systemB, topB, self)
+        with open(base / "hybrid_topology/output/hspw_edge_1_0_hybrid.pdb", "w") as f:
+            app.PDBFile.writeFile(h_factory.index_mapping.hybrid_top, h_factory.get_hybrid_position(0), f)
+
+        # check angle term on dummy atoms
+        c_angles_39 = find_term_in_force(h_factory.system, "CustomAngleForce", 39) # unique_A
+        self.assertEqual(len(c_angles_39), 4)
+        self.assertListEqual([c_angles_39[0][3][3], c_angles_39[1][3][3], c_angles_39[2][3][3], c_angles_39[3][3][1]], [0, 0, 0, 0])
+
+        c_angles_41 = find_term_in_force(h_factory.system, "CustomAngleForce", 41) # unique_B
+        h_angles_41 = find_term_in_force(h_factory.system, "HarmonicAngleForce", 41)  # unique_B
+        cA_angles_41 = find_term_in_force(h_factory.system, "CustomAngleForce_A", 41)  # unique_B
+        cB_angles_41 = find_term_in_force(h_factory.system, "CustomAngleForce_B", 41)  # unique_B
+
+        self.assertEqual(len(h_angles_41), 0)
+        self.assertEqual(len(c_angles_41), 7)
+        self.assertEqual(len(cA_angles_41), 0)
+        self.assertEqual(len(cB_angles_41), 5) # bond 21-41 is broken, 41 is a -CH2-, 21 is a -NH-. H-C21-N41 x2, C-C21-N41, C41-N21-C, C41-N21-N
+
 
     def test_hybrid_rest2_hspw_edge_2_3(self):
         print("\n hsp90 woodhead, break a bond in state A")
@@ -327,7 +345,30 @@ class MyTestCase(unittest.TestCase):
             index_map
         )
         check_bond_angle(h_factory, systemA, topA, systemB, topB, self)
+        with open(base / "hybrid_topology/output/hspw_edge_2_3_hybrid.pdb", "w") as f:
+            app.PDBFile.writeFile(h_factory.index_mapping.hybrid_top, h_factory.get_hybrid_position(0), f)
 
+        c_angles_42 = find_term_in_force(h_factory.system, "CustomAngleForce", 42) # unique_B
+        h_angles_42 = find_term_in_force(h_factory.system, "HarmonicAngleForce", 42)  # unique_B
+        cA_angles_42 = find_term_in_force(h_factory.system, "CustomAngleForce_A", 42)  # unique_B
+        cB_angles_42 = find_term_in_force(h_factory.system, "CustomAngleForce_B", 42)  # unique_B
+
+        self.assertEqual(len(h_angles_42), 0)
+        self.assertEqual(len(c_angles_42), 7)
+        for at0, at1, at2, angle_param in c_angles_42:
+            self.assertTupleEqual(angle_param[:2], angle_param[2:])
+        self.assertEqual(len(cA_angles_42), 0)
+        self.assertEqual(len(cB_angles_42), 0) # bond 21-41 is broken, 41 is a -CH2-, 21 is a -NH-. H-C21-N41 x2, C-C21-N41, C41-N21-C, C41-N21-N
+
+        c_angles_39 = find_term_in_force(h_factory.system, "CustomAngleForce", 39)  # unique_B
+        h_angles_39 = find_term_in_force(h_factory.system, "HarmonicAngleForce", 39)  # unique_B
+        cA_angles_39 = find_term_in_force(h_factory.system, "CustomAngleForce_A", 39)  # unique_B
+        cB_angles_39 = find_term_in_force(h_factory.system, "CustomAngleForce_B", 39)  # unique_B
+
+        self.assertEqual(len(h_angles_39), 0)
+        self.assertEqual(len(c_angles_39), 7)
+        self.assertEqual(len(cA_angles_39), 4)
+        self.assertEqual(len(cB_angles_39), 0)
 
 
 
