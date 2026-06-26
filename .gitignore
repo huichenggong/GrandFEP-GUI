@@ -26,3 +26,4 @@ app/uploads/
 /tests/public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/macrocycles/MHT1_lig3_alpha05/*
 
 
+/tests/hybrid_topology/output/hspw_edge_*_hybrid.pdb
