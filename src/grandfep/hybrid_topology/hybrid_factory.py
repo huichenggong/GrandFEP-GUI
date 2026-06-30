@@ -1085,6 +1085,7 @@ class HybridRest2TopologyFactoryBase:
         self._prepare_bond()                  # Add Forces for bond
         self._prepare_dummy_anchoring_point()
         self._prepare_angle()
+        self.hybrid_dihedral_info={} # for dihedral at0,at1,at2,at3 (min(at1,at2),max()):{"A":[DihedralInfo, ...], "B":[]}
         self._prepare_dihe()
 
 
@@ -1827,12 +1828,43 @@ class HybridRest2TopologyFactoryBase:
         """
         Prepare dihedral forces for the hybrid topology.
         """
-        
-        # walk through A and B do construct self.hybrid_dihedral_info
+        mapping = self.index_mapping
 
-        # set up forces
+        # ── Step 1: classify every end-state dihedral into hybrid_dihedral_info ──
+        #
+        # broken_bonds_A/B are lists of (hybrid_i, hybrid_j) tuples (already in
+        # hybrid index space).  DihedralInfo.classify() needs frozensets for O(1)
+        # membership tests across the span of each dihedral.
+        broken_A = {frozenset(pair) for pair in mapping.broken_bonds_A}
+        broken_B = {frozenset(pair) for pair in mapping.broken_bonds_B}
 
-        pass
+        def _collect(ms, map_to_hybrid, broken_bonds, state_key):
+            for is_proper, table in [
+                (True,  ms.proper_dihedrals),
+                (False, ms.improper_dihedrals),
+            ]:
+                for t in table:
+                    h0, h1, h2, h3 = (map_to_hybrid[a] for a in t.atoms)
+                    p = t.potential.parameters
+                    info = DihedralInfo.classify(
+                        atoms=(h0, h1, h2, h3),
+                        periodicity=p["periodicity"],
+                        phase=p["phase"],
+                        k=p["k"],
+                        is_proper=is_proper,
+                        broken_bonds=broken_bonds,
+                        rotatable_bonds=self.rotatable_bonds,
+                        atom_identity=mapping.atom_identity,
+                    )
+                    cb_key = (min(h1, h2), max(h1, h2))
+                    if cb_key not in self.hybrid_dihedral_info:
+                        self.hybrid_dihedral_info[cb_key] = {"A": [], "B": []}
+                    self.hybrid_dihedral_info[cb_key][state_key].append(info)
+
+        _collect(self.molecule_system_A, mapping.map_A_to_hybrid, broken_A, "A")
+        _collect(self.molecule_system_B, mapping.map_B_to_hybrid, broken_B, "B")
+
+        # step2 set up forces
 
 
 class HybridRest2TopologyFactory(HybridRest2TopologyFactoryBase):

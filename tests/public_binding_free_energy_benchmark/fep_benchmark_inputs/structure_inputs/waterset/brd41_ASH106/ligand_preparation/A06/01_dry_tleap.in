@@ -1,0 +1,12 @@
+source leaprc.water.tip3p
+source leaprc.gaff2
+
+MOL = loadmol2 A06.mol2
+loadamberparams A06.frcmod
+
+set MOL box { 30.0 30.0 30.0 }
+
+savepdb       MOL 01_dry.pdb
+saveamberparm MOL 01_dry.prmtop 01_dry.inpcrd
+
+quit

@@ -1,0 +1,215 @@
+log started: Tue Jun 30 20:35:19 2026
+
+Log file: ./leap.log
+>> #
+>> # ----- leaprc for loading the general Amber Force field.
+>> #       This file is mostly for use with Antechamber
+>> #
+>> #	load atom type hybridizations
+>> #
+>> addAtomTypes {
+>> 	{ "h1"  "H" "sp3" }
+>> 	{ "h2"  "H" "sp3" }
+>> 	{ "h3"  "H" "sp3" }
+>> 	{ "h4"  "H" "sp3" }
+>> 	{ "h5"  "H" "sp3" }
+>> 	{ "ha"  "H" "sp3" }
+>> 	{ "hc"  "H" "sp3" }
+>> 	{ "hn"  "H" "sp3" }
+>> 	{ "ho"  "H" "sp3" }
+>> 	{ "hp"  "H" "sp3" }
+>> 	{ "hs"  "H" "sp3" }
+>> 	{ "hw"  "H" "sp3" }
+>> 	{ "hx"  "H" "sp3" }
+>> 	{ "o"  "O" "sp2" }
+>> 	{ "o2"  "O" "sp2" }
+>> 	{ "oh"  "O" "sp3" }
+>> 	{ "op"  "O" "sp3" }
+>> 	{ "oq"  "O" "sp3" }
+>> 	{ "os"  "O" "sp3" }
+>> 	{ "ow"  "O" "sp3" }
+>> 	{ "c"  "C" "sp2" }
+>> 	{ "c1"  "C" "sp2" }
+>> 	{ "c2"  "C" "sp2" }
+>> 	{ "c3"  "C" "sp3" }
+>> 	{ "c5"  "C" "sp3" }
+>> 	{ "c6"  "C" "sp3" }
+>> 	{ "ca"  "C" "sp2" }
+>> 	{ "cc"  "C" "sp2" }
+>> 	{ "cd"  "C" "sp2" }
+>> 	{ "ce"  "C" "sp2" }
+>> 	{ "cf"  "C" "sp2" }
+>> 	{ "cg"  "C" "sp2" }
+>> 	{ "ch"  "C" "sp2" }
+>> 	{ "cp"  "C" "sp2" }
+>> 	{ "cs"  "C" "sp2" }
+>> 	{ "cq"  "C" "sp2" }
+>> 	{ "cu"  "C" "sp2" }
+>> 	{ "cv"  "C" "sp2" }
+>> 	{ "cx"  "C" "sp2" }
+>> 	{ "cy"  "C" "sp2" }
+>> 	{ "cz"  "C" "sp2" }
+>> 	{ "n"   "N" "sp2" }
+>> 	{ "n1"  "N" "sp2" }
+>> 	{ "n2"  "N" "sp2" }
+>> 	{ "n3"  "N" "sp3" }
+>> 	{ "n4"  "N" "sp3" }
+>> 	{ "n5"  "N" "sp3" }
+>> 	{ "n6"  "N" "sp3" }
+>> 	{ "n7"  "N" "sp3" }
+>> 	{ "n8"  "N" "sp3" }
+>> 	{ "n9"  "N" "sp3" }
+>> 	{ "na"  "N" "sp2" }
+>> 	{ "nb"  "N" "sp2" }
+>> 	{ "nc"  "N" "sp2" }
+>> 	{ "nd"  "N" "sp2" }
+>> 	{ "ne"  "N" "sp2" }
+>> 	{ "nf"  "N" "sp2" }
+>> 	{ "nh"  "N" "sp2" }
+>> 	{ "ni"  "N" "sp2" }
+>> 	{ "nj"  "N" "sp2" }
+>> 	{ "nk"  "N" "sp3" }
+>> 	{ "nl"  "N" "sp3" }
+>> 	{ "nm"  "N" "sp2" }
+>> 	{ "nn"  "N" "sp2" }
+>> 	{ "no"  "N" "sp2" }
+>> 	{ "np"  "N" "sp3" }
+>> 	{ "nq"  "N" "sp3" }
+>> 	{ "ns"  "N" "sp2" }
+>> 	{ "nt"  "N" "sp2" }
+>> 	{ "nu"  "N" "sp2" }
+>> 	{ "nv"  "N" "sp2" }
+>> 	{ "nx"  "N" "sp3" }
+>> 	{ "ny"  "N" "sp3" }
+>> 	{ "nz"  "N" "sp3" }
+>> 	{ "n+"  "N" "sp3" }
+>> 	{ "s"   "S" "sp2" }
+>> 	{ "s2"   "S" "sp2" }
+>> 	{ "s3"   "S" "sp3" }
+>> 	{ "s4"   "S" "sp3" }
+>> 	{ "s6"   "S" "sp3" }
+>> 	{ "sh"   "S" "sp3" }
+>> 	{ "sp"   "S" "sp3" }
+>> 	{ "sq"   "S" "sp3" }
+>> 	{ "ss"   "S" "sp3" }
+>> 	{ "sx"   "S" "sp3" }
+>> 	{ "sy"   "S" "sp3" }
+>> 	{ "p2"   "P" "sp2" }
+>> 	{ "p3"   "P" "sp3" }
+>> 	{ "p4"   "P" "sp3" }
+>> 	{ "p5"   "P" "sp3" }
+>> 	{ "pb"   "P" "sp3" }
+>> 	{ "pc"   "P" "sp3" }
+>> 	{ "pd"   "P" "sp3" }
+>> 	{ "pe"   "P" "sp3" }
+>> 	{ "pf"   "P" "sp3" }
+>> 	{ "px"   "P" "sp3" }
+>> 	{ "py"   "P" "sp3" }
+>> 	{ "f"   "F" "sp3" }
+>> 	{ "cl"  "Cl" "sp3" }
+>> 	{ "br"  "Br" "sp3" }
+>> 	{ "i"   "I"  "sp3" }
+>> }
+>> #
+>> #	Load the general force field parameter set.
+>> #
+>> gaff = loadamberparams gaff2.dat
+Loading parameters: /home/cheng/Software/miniforge3/envs/gfep_gui_dev/dat/leap/parm/gaff2.dat
+Reading title:
+AMBER General Force Field for organic molecules (Version 2.2.20, March 2021)
+> 
+> 
+>         MOL1 = loadmol2 A01/A01.mol2
+Loading Mol2 file: ./A01/A01.mol2
+Reading MOLECULE named A01
+> loadamberparams A01/A01.frcmod
+Loading parameters: ./A01/A01.frcmod
+Reading force field modification type file (frcmod)
+Reading title:
+Remark line goes here
+> MOL2 = loadmol2 A02/A02.mol2
+Loading Mol2 file: ./A02/A02.mol2
+Reading MOLECULE named A02
+> loadamberparams A02/A02.frcmod
+Loading parameters: ./A02/A02.frcmod
+Reading force field modification type file (frcmod)
+Reading title:
+Remark line goes here
+> MOL3 = loadmol2 A03/A03.mol2
+Loading Mol2 file: ./A03/A03.mol2
+Reading MOLECULE named A03
+> loadamberparams A03/A03.frcmod
+Loading parameters: ./A03/A03.frcmod
+Reading force field modification type file (frcmod)
+Reading title:
+Remark line goes here
+> MOL4 = loadmol2 A04/A04.mol2
+Loading Mol2 file: ./A04/A04.mol2
+Reading MOLECULE named A04
+> loadamberparams A04/A04.frcmod
+Loading parameters: ./A04/A04.frcmod
+Reading force field modification type file (frcmod)
+Reading title:
+Remark line goes here
+> MOL5 = loadmol2 A05/A05.mol2
+Loading Mol2 file: ./A05/A05.mol2
+Reading MOLECULE named A05
+> loadamberparams A05/A05.frcmod
+Loading parameters: ./A05/A05.frcmod
+Reading force field modification type file (frcmod)
+Reading title:
+Remark line goes here
+> MOL6 = loadmol2 A06/A06.mol2
+Loading Mol2 file: ./A06/A06.mol2
+Reading MOLECULE named A06
+> loadamberparams A06/A06.frcmod
+Loading parameters: ./A06/A06.frcmod
+Reading force field modification type file (frcmod)
+Reading title:
+Remark line goes here
+> MOL7 = loadmol2 A07/A07.mol2
+Loading Mol2 file: ./A07/A07.mol2
+Reading MOLECULE named A07
+> loadamberparams A07/A07.frcmod
+Loading parameters: ./A07/A07.frcmod
+Reading force field modification type file (frcmod)
+Reading title:
+Remark line goes here
+> MOL8 = loadmol2 A08/A08.mol2
+Loading Mol2 file: ./A08/A08.mol2
+Reading MOLECULE named A08
+> loadamberparams A08/A08.frcmod
+Loading parameters: ./A08/A08.frcmod
+Reading force field modification type file (frcmod)
+Reading title:
+Remark line goes here
+> 
+>         COMBINED = combine { MOL1 MOL2 MOL3 MOL4 MOL5 MOL6 MOL7 MOL8 }
+  Sequence: A01
+  Sequence: A02
+  Sequence: A03
+  Sequence: A04
+  Sequence: A05
+  Sequence: A06
+  Sequence: A07
+  Sequence: A08
+> 
+>         solvateoct COMBINED TIP3PBOX 12.0
+Scaling up box by a factor of 1.220460 to meet diagonal cut criterion
+  Solute vdw bounding box:              7.655 16.057 11.811
+  Total bounding box for atom centers:  45.349 45.349 45.349
+      (box expansion for 'iso' is  35.4%)
+  Solvent unit box:                     18.774 18.774 18.774
+The number of boxes:  x= 3  y= 3  z= 3
+  Volume: 49782.609 A^3 (oct)
+  Total mass 27405.088 amu,  Density 0.914 g/cc
+  Added 1377 residues.
+> 
+>         savepdb COMBINED 00_ref_solvated.pdb
+Writing pdb file: 00_ref_solvated.pdb
+   printing CRYST1 record to PDB file with box info
+> 
+>         quit
+	Quit
+
+Exiting LEaP: Errors = 0; Warnings = 0; Notes = 0.

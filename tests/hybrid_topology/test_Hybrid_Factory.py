@@ -370,6 +370,40 @@ class MyTestCase(unittest.TestCase):
         self.assertEqual(len(cA_angles_39), 4)
         self.assertEqual(len(cB_angles_39), 0)
 
+    def test_brd4_all(self):
+        print("\n brd4")
+        ligand_path = base / "public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/waterset/brd41_ASH106/"
+        for edge, a_name, b_name in [
+            ["edge_0_6", "A01", "A07"],
+            ["edge_1_0", "A02", "A01"],
+            ["edge_1_2", "A02", "A03"],
+            ["edge_1_3", "A02", "A04"],
+            ["edge_1_4", "A02", "A05"],
+            ["edge_1_5", "A02", "A06"],
+            ["edge_1_6", "A02", "A07"],
+            ["edge_1_7", "A02", "A08"],
+            ["edge_2_7", "A03", "A08"],
+            ["edge_3_5", "A04", "A06"],
+            ["edge_4_6", "A05", "A07"],
+        ]:
+            print(f"## {edge}")
+            lig1_path = ligand_path / f"ligand_preparation/{a_name}"
+            lig2_path = ligand_path / f"ligand_preparation/{b_name}"
+            with open(ligand_path / f"{edge}/mapping_visial_checked.json") as f:
+                mapping = json.load(f)
+            inpcrdA, prmtopA, topA, systemA, rotatable_A = load_ligand(lig1_path / "02_solv.inpcrd",
+                                                                       lig1_path / "02_solv.prmtop",
+                                                                       lig1_path / f"{lig1_path.name}.sdf")
+            inpcrdB, prmtopB, topB, systemB, rotatable_B = load_ligand(lig2_path / "02_solv.inpcrd",
+                                                                       lig2_path / "02_solv.prmtop",
+                                                                       lig2_path / f"{lig2_path.name}.sdf")
+            index_map = hybrid_topology.HybridIndexMapping(topA, topB, {0: mapping})
+            h_factory = hybrid_topology.HybridRest2TopologyFactoryBase(
+                systemA, inpcrdA.positions, rotatable_A,
+                systemB, inpcrdB.positions, rotatable_B,
+                index_map
+            )
+
 
 
 if __name__ == '__main__':
