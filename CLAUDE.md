@@ -94,7 +94,16 @@ Maps atom indices from two end-state topologies (A and B) onto a single hybrid t
 **Key attributes:**
 - `map_A_to_hybrid`, `map_B_to_hybrid` — global index → hybrid index
 - `map_hybrid_to_A`, `map_hybrid_to_B` — reverse mappings
-- `core_atoms`, `unique_A_atoms`, `unique_B_atoms`, `env_atoms` — disjoint sets covering all hybrid indices
+- `core_atoms`, `unique_A_atoms`, `unique_B_atoms`, `env_atoms` — disjoint sets covering all hybrid indices. 
+`core_atoms`: The parameters (bond, angle, dihedral, vdw, coulomb) around thoes atoms can possibly changed. 
+`unique_A_atoms`: They only exist in state A and will be dummy atoms in state B. All the nonbonded (vdw, coulomb) 
+interaction around those atoms will be turned off in state B. Bond will be kept untouched on those atoms in state B. 
+The uncoupled angle interaction will be kept, for example `core`-`unique`-`unique` and `unique`-`unique`-`unique`. 
+The `core`-`core`-`unique` will be specially treated as different types of anchoring point. The uncoupled 
+dihedral if rotatable will be scaled down in state B, for example `unique`-`unique`-`unique`-`unique`, 
+`core`-`unique`-`unique`-`unique`, `core`-`core`-`unique`-`unique`. The `core`-`core`-`core`-`unique` 
+will in general, be turned to 0 in state B. `unique_B_atoms`: They only exist in state B and will be dummy 
+atoms in state A.  
 - `atom_identity: dict[int, str]` — maps each hybrid index to one of `"core"`, `"unique_A"`, `"unique_B"`, `"env"`
 - `broken_bonds_A`, `broken_bonds_B` — bonds present in only one end-state (hybrid-index pairs)
 - `hybrid_top: openmm.app.Topology` — the merged hybrid topology
