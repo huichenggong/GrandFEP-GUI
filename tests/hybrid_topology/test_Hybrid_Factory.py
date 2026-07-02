@@ -403,7 +403,36 @@ class MyTestCase(unittest.TestCase):
                 systemB, inpcrdB.positions, rotatable_B,
                 index_map
             )
+            with open(ligand_path / f"{edge}/hybrid_solv.pdb", "w") as f:
+                app.PDBFile.writeFile(h_factory.index_mapping.hybrid_top, h_factory.get_hybrid_position(0), f)
 
+            if edge == "edge_0_6":
+                pass
+    
+    def test_dihedral_LUT(self):
+        """_PROPER_DIHEDRAL_GROUP_LUT covers all 16 (r/u)^4 patterns correctly."""
+        import itertools
+        from grandfep.hybrid_topology import hybrid_factory
+
+        lut = hybrid_factory._PROPER_DIHEDRAL_GROUP_LUT
+
+        # --- completeness: exactly the 16 (r/u)^4 keys, nothing more ---
+        all_keys = set(itertools.product(["r", "u"], repeat=4))
+        self.assertEqual(set(lut.keys()), all_keys,
+                         "LUT keys do not match the full (r/u)^4 set")
+
+        # --- expected group for each key ---
+        # None  → forbidden (u at inner position, or c-u-u-c)
+        expected: dict[tuple, str | None] = {
+            ("r", "r", "u", "r"): None,
+            ("r", "u", "r", "r"): None,
+            ("r", "u", "u", "r"): None,
+            ("u", "r", "u", "r"): None,
+            ("r", "u", "r", "u"): None,
+        }
+        for key, group in expected.items():
+            self.assertEqual(lut[key], group,
+                             f"LUT[{key}]: expected {group!r}, got {lut[key]!r}")
 
 
 if __name__ == '__main__':

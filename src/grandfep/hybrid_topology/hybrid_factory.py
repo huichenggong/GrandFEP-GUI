@@ -71,8 +71,7 @@ class AnchorInfo:
 # Maps (at0_cat, at1_cat, at2_cat, at3_cat) → group string.
 #
 # Categories collapse the four atom identities to three:
-#   "e" = env
-#   "c" = core
+#   "r" = env/core
 #   "u" = unique_A  *or*  unique_B   (state encoded by which list the
 #                                      DihedralInfo is stored in, not here)
 #
@@ -81,53 +80,47 @@ class AnchorInfo:
 #
 #
 # some state cannot be found, this means it is not allowed, for example c-u-u-c
-_PROPER_DIHEDRAL_GROUP_LUT: dict[tuple[str, str, str, str], str] = {
+_PROPER_DIHEDRAL_GROUP_LUT: dict[tuple[str, str, str, str], str|None] = {
     # ── uu  ──────────────────────────────────────────────────
     # ──── 4u
     ("u", "u", "u", "u"): "uu",
 }
 
 # ── normal  ───────────────────────────────────────────────
-# ──── X e + X c
-for key in itertools.product(["e", "c"], repeat=4):
+# ──── 4r (env/core)
+for key in itertools.product("r", repeat=4):
     _PROPER_DIHEDRAL_GROUP_LUT[key] = "normal"
-_PROPER_DIHEDRAL_GROUP_LUT[("e","e","e","e")] = "env"
 
 # ── anchor  ──────────────────────────────────────────────────
 # ──── 1u
-for i,j,k in itertools.product(["e", "c"], repeat=3):
+for i,j,k in itertools.product("r", repeat=3):
     _PROPER_DIHEDRAL_GROUP_LUT[(i, j, k, "u")] = "anchor"
     _PROPER_DIHEDRAL_GROUP_LUT[("u", i, j, k)] = "anchor"
-    # (i, "u", j, k) is not allowed in proper dihe
-    # (i, j, "u", k) is not allowed in proper dihe
+    _PROPER_DIHEDRAL_GROUP_LUT[(i, "u", j, k)] = None # This is not allowed in proper dihe
+    _PROPER_DIHEDRAL_GROUP_LUT[(i, j, "u", k)] = None # This is not allowed in proper dihe
 
 # ──── 2u
-for i,j in itertools.product(["e", "c"], repeat=2):
-    _PROPER_DIHEDRAL_GROUP_LUT[("u", "u", i, j)] = "anchor"
+for i,j in itertools.product("r", repeat=2):
+    _PROPER_DIHEDRAL_GROUP_LUT[("u", "u", i, j)] = "uu"
     _PROPER_DIHEDRAL_GROUP_LUT[("u", i, j, "u")] = "anchor"
-    _PROPER_DIHEDRAL_GROUP_LUT[(i, j, "u", "u")] = "anchor"
-    # (i, "u", "u", j) is not allowed in proper dihe
-    # ("u", i, "u", j) is not allowed in proper dihe
-    # (i, "u", j, "u") is not allowed in proper dihe
+    _PROPER_DIHEDRAL_GROUP_LUT[(i, j, "u", "u")] = "uu"
+    _PROPER_DIHEDRAL_GROUP_LUT[(i, "u", "u", j)] = None # This is not allowed in proper dihe
+    _PROPER_DIHEDRAL_GROUP_LUT[("u", i, "u", j)] = None # This is not allowed in proper dihe
+    _PROPER_DIHEDRAL_GROUP_LUT[(i, "u", j, "u")] = None # This is not allowed in proper dihe
 
 # ──── 3u
-for i in ["e", "c"]:
-    _PROPER_DIHEDRAL_GROUP_LUT[(i, "u", "u", "u")] = "uu"
-    _PROPER_DIHEDRAL_GROUP_LUT[("u", i, "u", "u")] = "uu"
-    _PROPER_DIHEDRAL_GROUP_LUT[("u", "u", i, "u")] = "uu"
-    _PROPER_DIHEDRAL_GROUP_LUT[("u", "u", "u", i)] = "uu"
+_PROPER_DIHEDRAL_GROUP_LUT[("r", "u", "u", "u")] = "uu"
+_PROPER_DIHEDRAL_GROUP_LUT[("u", "r", "u", "u")] = "uu"
+_PROPER_DIHEDRAL_GROUP_LUT[("u", "u", "r", "u")] = "uu"
+_PROPER_DIHEDRAL_GROUP_LUT[("u", "u", "u", "r")] = "uu"
 
-_IMPROPER_DIHEDRAL_GROUP_LUT: dict[tuple[str, str, str, str], str] = copy.deepcopy(_PROPER_DIHEDRAL_GROUP_LUT)
+_IMPROPER_DIHEDRAL_STAR_GROUP_LUT: dict[tuple,str] = {}
 
-# ──── 1u
-for i,j,k in itertools.product(["e", "c"], repeat=3):
-    _IMPROPER_DIHEDRAL_GROUP_LUT[(i, "u", j, k)] = "anchor"
-    _IMPROPER_DIHEDRAL_GROUP_LUT[(i, j, "u", k)] = "anchor"
-# ──── 2u
-for i,j in itertools.product(["e", "c"], repeat=2):
-    _IMPROPER_DIHEDRAL_GROUP_LUT[(i, "u", "u", j)] = "anchor"
-    _IMPROPER_DIHEDRAL_GROUP_LUT[("u", i, "u", j)] = "anchor"
-    _IMPROPER_DIHEDRAL_GROUP_LUT[(i, "u", j, "u")] = "anchor"
+
+
+
+
+
 
 
 @dataclass(frozen=True)
