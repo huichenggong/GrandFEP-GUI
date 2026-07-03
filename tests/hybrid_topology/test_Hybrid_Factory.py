@@ -1,7 +1,6 @@
 import unittest
 from pathlib import Path
-from typing import List, Tuple
-import copy
+import itertools
 import json
 
 import numpy as np
@@ -409,9 +408,33 @@ class MyTestCase(unittest.TestCase):
             if edge == "edge_0_6":
                 pass
     
+    def test_improper_dihedral_star_LUT(self):
+        print("\n_IMPROPER_DIHEDRAL_STAR_GROUP_LUT covers all star-topology cases correctly.")
+        from grandfep.hybrid_topology import hybrid_factory
+
+        lut = hybrid_factory._IMPROPER_DIHEDRAL_STAR_GROUP_LUT
+
+        # Distinct sorted outer-label tuples (multiplicity matters: 4 patterns, not 2^3=8)
+        outer_patterns = {tuple(t) for t in itertools.product(["r", "u"], repeat=3)}
+        all_keys = {(hub, outer) for hub in ("r", "u") for outer in outer_patterns}
+        self.assertEqual(set(lut.keys()), all_keys,
+                         "LUT keys do not match the expected set")
+
+        expected: dict[tuple, str | None] = {
+            # ─── 2r, 1u
+            ("u", ("r", "r", "u")): None,
+            ("u", ("r", "u", "r")): None,
+            ("u", ("u", "r", "r")): None,
+            # ─── 3r
+            ("u", ("r", "r", "r")): None,
+        }
+        for key, group in expected.items():
+            self.assertEqual(lut[key], group,
+                             f"LUT[{key}]: expected {group}, got {lut[key]}")
+
+
     def test_dihedral_LUT(self):
-        """_PROPER_DIHEDRAL_GROUP_LUT covers all 16 (r/u)^4 patterns correctly."""
-        import itertools
+        print("\n_PROPER_DIHEDRAL_GROUP_LUT covers all 16 (r/u)^4 patterns correctly.")
         from grandfep.hybrid_topology import hybrid_factory
 
         lut = hybrid_factory._PROPER_DIHEDRAL_GROUP_LUT
@@ -421,7 +444,6 @@ class MyTestCase(unittest.TestCase):
         self.assertEqual(set(lut.keys()), all_keys,
                          "LUT keys do not match the full (r/u)^4 set")
 
-        # --- expected group for each key ---
         # None  → forbidden (u at inner position, or c-u-u-c)
         expected: dict[tuple, str | None] = {
             ("r", "r", "u", "r"): None,
@@ -430,9 +452,8 @@ class MyTestCase(unittest.TestCase):
             ("u", "r", "u", "r"): None,
             ("r", "u", "r", "u"): None,
         }
-        for key, group in expected.items():
-            self.assertEqual(lut[key], group,
-                             f"LUT[{key}]: expected {group!r}, got {lut[key]!r}")
+        for k,v in expected.items():
+            self.assertEqual(lut[k], v,)
 
 
 if __name__ == '__main__':
