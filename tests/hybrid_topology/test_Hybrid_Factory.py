@@ -255,7 +255,7 @@ class MyTestCase(unittest.TestCase):
         check_bond_angle(h_factory, systemA, topA, systemB, topB, self)
 
     def test_hybrid_rest2_hspw_edge_1_0(self):
-        print("\n hsp90 woodhead, break a bond in state B")
+        print("\n# hsp90 woodhead, break a bond in state B")
         ligand_path = base / "public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/waterset/hsp90_woodhead/"
         lig1_path = ligand_path / "ligand_preparation/A02"
         lig2_path = ligand_path / "ligand_preparation/A01"
@@ -268,6 +268,7 @@ class MyTestCase(unittest.TestCase):
                                                              lig2_path / f"{lig2_path.name}.sdf")
         with open(ligand_path / "edge_1_0/mapping_visial_checked.json") as f:
             mapping = json.load(f)
+        print("\n## Hybridization")
         index_map = hybrid_topology.HybridIndexMapping(topA, topB, {0: mapping})
         self.assertListEqual(["SP3", "SP3", "SP2", "SP2", "SP2"], [index_map.hybridization["A"][0][idx] for idx in [1, 2, 3, 4, 5]])
         self.assertListEqual(["SP3", "SP3", "SP2", "SP2", "SP2"], [index_map.hybridization["B"][0][idx] for idx in [2, 3, 4, 5, 6]])
@@ -283,6 +284,7 @@ class MyTestCase(unittest.TestCase):
             [h_factory.molecule_system_B.atoms[i].hybridization for i in [5, 6, 7, 9]],
             ["SP2", "SP2", "SP2", "SP2"]) # C, C, C, N
 
+        print("## Anchor Info")
         self.assertSetEqual({1, 21}, set([hybrid_idx for hybrid_idx in h_factory.anchor_info.keys()]))
         self.assertEqual(    h_factory.anchor_info[1].hybridization_A, "SP3")
         self.assertEqual(    h_factory.anchor_info[1].hybridization_B, "SP3")
@@ -302,7 +304,7 @@ class MyTestCase(unittest.TestCase):
         self.assertEqual(len(h_factory.anchor_info[21].angle_A), 1)
         self.assertEqual(len(h_factory.anchor_info[21].angle_B), 3)
 
-
+        print("## bond force and angle force")
         check_bond_angle(h_factory, systemA, topA, systemB, topB, self)
         with open(base / "hybrid_topology/output/hspw_edge_1_0_hybrid.pdb", "w") as f:
             app.PDBFile.writeFile(h_factory.index_mapping.hybrid_top, h_factory.get_hybrid_position(0), f)
@@ -321,6 +323,8 @@ class MyTestCase(unittest.TestCase):
         self.assertEqual(len(c_angles_41), 7)
         self.assertEqual(len(cA_angles_41), 0)
         self.assertEqual(len(cB_angles_41), 5) # bond 21-41 is broken, 41 is a -CH2-, 21 is a -NH-. H-C21-N41 x2, C-C21-N41, C41-N21-C, C41-N21-N
+
+        print("## Dihedral Info")
 
 
     def test_hybrid_rest2_hspw_edge_2_3(self):
@@ -405,6 +409,36 @@ class MyTestCase(unittest.TestCase):
             with open(ligand_path / f"{edge}/hybrid_solv.pdb", "w") as f:
                 app.PDBFile.writeFile(h_factory.index_mapping.hybrid_top, h_factory.get_hybrid_position(0), f)
 
+            print(f"### Check Number of Dihedral entry")
+            ptf_A = next(
+                f for f in (systemA.getForce(i) for i in range(systemA.getNumForces()))
+                if isinstance(f, openmm.PeriodicTorsionForce)
+            )
+            ptf_B = next(
+                f for f in (systemB.getForce(i) for i in range(systemB.getNumForces()))
+                if isinstance(f, openmm.PeriodicTorsionForce)
+            )
+            n_src_A, n_src_B = ptf_A.getNumTorsions(), ptf_B.getNumTorsions()
+            n_classified_A = (
+                sum(len(v["A"]) for v in h_factory.hybrid_proper_dihedral_info.values())
+                + sum(len(v["A"]) for v in h_factory.hybrid_improper_dihedral_info.values())
+            )
+            n_classified_B = (
+                    sum(len(v["B"]) for v in h_factory.hybrid_proper_dihedral_info.values())
+                    + sum(len(v["B"]) for v in h_factory.hybrid_improper_dihedral_info.values())
+            )
+            self.assertEqual(
+                n_src_A, n_classified_A,
+                f"{edge}: systemA has {n_src_A} torsion terms but "
+                f"hybrid_dihedral_info['A'] has {n_classified_A}"
+            )
+            self.assertEqual(
+                n_src_B, n_classified_B,
+                f"{edge}: systemB has {n_src_B} torsion terms but "
+                f"hybrid_dihedral_info['A'] has {n_classified_B}"
+            )
+
+            
             if edge == "edge_0_6":
                 pass
     

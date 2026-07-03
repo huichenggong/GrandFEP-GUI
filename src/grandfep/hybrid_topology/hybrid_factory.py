@@ -73,7 +73,7 @@ class AnchorInfo:
 # Categories collapse the four atom identities to three:
 #   "r" = env/core
 #   "u" = unique_A  *or*  unique_B   (state encoded by which list the
-#                                      DihedralInfo is stored in, not here)
+#                                      dihedral info object is stored in, not here)
 #
 # The "break" group is assigned by the broken-bond check BEFORE this table is
 # consulted, so it does not appear as a value here.
@@ -88,8 +88,7 @@ _PROPER_DIHEDRAL_GROUP_LUT: dict[tuple[str, str, str, str], str|None] = {
 
 # ── normal  ───────────────────────────────────────────────
 # ──── 4r (env/core)
-for key in itertools.product("r", repeat=4):
-    _PROPER_DIHEDRAL_GROUP_LUT[key] = "normal"
+_PROPER_DIHEDRAL_GROUP_LUT[("r", "r", "r", "r")] = "normal"
 
 # ── anchor  ──────────────────────────────────────────────────
 # ──── 1u
@@ -114,93 +113,79 @@ _PROPER_DIHEDRAL_GROUP_LUT[("u", "r", "u", "u")] = "uu"
 _PROPER_DIHEDRAL_GROUP_LUT[("u", "u", "r", "u")] = "uu"
 _PROPER_DIHEDRAL_GROUP_LUT[("u", "u", "u", "r")] = "uu"
 
-_IMPROPER_DIHEDRAL_STAR_GROUP_LUT: dict[tuple,str] = {}
-
-
-
-
-
-
+# ---------------------------------------------------------------------------
+# Improper dihedral group lookup table (star topology)
+# ---------------------------------------------------------------------------
+# Key: (hub_label, tuple(outer_labels))
+#   hub   = the atom bonded to all three others (at2 in AMBER convention, can be different in openff)
+#   outer = tuple of the three outer atom labels (preserves multiplicity)
+#   "r"   = env or core
+#   "u"   = unique_A or unique_B
+#
+# None → forbidden (dummy hub bonded to 2+ real atoms, violates True Dummy
+#         separability).  Absent keys → topology not expected, raises ValueError.
+#
+# Real hub: every dummy outer atom is directly bonded to the real hub
+#   → it is a first-dummy → pinned by _prepare_dummy_anchoring_point
+#   → the FF improper is zeroed in the dummy state ("anchor").
+#
+# Dummy hub ("u", ("r","u","u")): the hub has 1 real neighbour (OK).
+#   _prepare_dummy_anchoring_point generates a harmonic sp3/sp2 stereo
+#   improper at the hub → setting FF improper k=0 avoids double-counting
+#   the same torsional DOF ("anchor").
+#
+# All-dummy ("u", ("u","u","u")): no anchor restraints compete
+#   → improper integrates to I₀(βk) = const → "uu".
+_IMPROPER_DIHEDRAL_STAR_GROUP_LUT: dict[tuple, str | None] = {
+    # ── real hub ────────────────────────────────────────────────────────────
+    # ──── 3r
+    ("r", ("r", "r", "r")): "normal",
+    # ─── 2r, 1u
+    ("r", ("r", "r", "u")): "anchor",
+    ("r", ("r", "u", "r")): "anchor",
+    ("r", ("u", "r", "r")): "anchor",
+    # ─── 1r, 2u
+    ("r", ("r", "u", "u")): "anchor",
+    ("r", ("u", "r", "u")): "anchor",
+    ("r", ("u", "u", "r")): "anchor",
+    # ─── 3u
+    ("r", ("u", "u", "u")): "anchor",
+    # ── dummy hub, 1 real neighbour ─────────────────────────────────────────
+    # ─── 3u
+    ("u", ("u", "u", "u")): "uu",
+    # ─── 1r, 2u
+    ("u", ("r", "u", "u")): "uu",
+    ("u", ("u", "r", "u")): "uu",
+    ("u", ("u", "u", "r")): "uu",
+    # ─── 2r, 1u
+    ("u", ("r", "r", "u")): None,
+    ("u", ("r", "u", "r")): None,
+    ("u", ("u", "r", "r")): None,
+    # ─── 3r
+    ("u", ("r", "r", "r")): None,
+}
 
 
 @dataclass(frozen=True)
-class DihedralInfo:
-    """One torsion term in the hybrid topology, from a single end-state.
+class DihedralInfoBase:
+    """Shared base for proper and improper torsion terms in the hybrid topology.
 
-    Each ``DihedralInfo`` comes from exactly one end-state (A or B).  Terms
-    are stored in ``hybrid_dihedral_info`` under the central-bond key as two
-    separate lists::
+    Each instance comes from exactly one end-state (A or B).  Proper and
+    improper terms are stored in separate dicts on the factory::
 
-        hybrid_dihedral_info[(min(at1,at2), max(at1,at2))] = {
-            "A": [DihedralInfo, ...],   # terms read from state A
-            "B": [DihedralInfo, ...],   # terms read from state B
+        hybrid_proper_dihedral_info[(min(at1,at2), max(at1,at2))] = {
+            "A": [ProperDihedralInfo, ...],
+            "B": [ProperDihedralInfo, ...],
         }
 
-    Because the state is already encoded by which list the entry belongs to,
-    there is no ``from_state`` field and no A/B suffix on group names.  The
-    force-builder iterates both lists and sets ``k0=k, k1=0`` for "A" entries
-    and ``k0=0, k1=k`` for "B" entries (adjusted by group-specific rules).
+        hybrid_improper_dihedral_info[hub_index] = {
+            "A": [ImproperDihedralInfo, ...],
+            "B": [ImproperDihedralInfo, ...],
+        }
 
-    Atom ordering
-    -------------
-    ``atoms = (at0, at1, at2, at3)`` in hybrid-topology indices.
-    The *central bond* is ``at1–at2``.
-
-    Proper dihedral::
-
-        at0 — at1 — at2 — at3          bonds checked: 01, 12, 23
-
-    Improper dihedral (``at2`` is the branching centre)::
-
-        at0 — at2 — at3                bonds checked: 01, 02, 12, 23, 13
-        at1 —/
-
-    Broken-bond check
-    -----------------
-    A term has ``group="break"`` when **any** bond in its span (see above)
-    belongs to ``broken_bonds_A`` (for an "A"-list entry) or
-    ``broken_bonds_B`` (for a "B"-list entry).
-
-    Group classification
-    --------------------
-    The group is determined by collapsing each atom's identity to one of three
-    categories — ``"e"`` (env), ``"c"`` (core), ``"u"`` (unique_A or unique_B)
-    — and looking up the resulting 4-tuple in ``_PROPER_DIHEDRAL_GROUP_LUT`` or
-    ``_IMPROPER_DIHEDRAL_GROUP_LUT``.  Patterns absent from the table are
-    forbidden and raise ``ValueError`` (e.g. ``c-u-u-c``, unique atoms at inner
-    positions of a proper dihedral).
-
-    The number of unique atoms in the pattern determines whether the term is
-    ``"anchor"`` or ``"uu"``:
-
-    * **1u / 2u → "anchor"**: 1 or 2 unique atoms (in permitted positions).
-      The periodic FF dihedral is removed (k=0) in the dummy state because the
-      geometric constraint it would provide is replaced by the harmonic anchor
-      restraints from ``_prepare_dummy_anchoring_point`` (group ``"dummy"``).
-
-    * **3u / 4u → "uu"**: 3 or 4 unique atoms.  Even when one atom is
-      core/env, the dihedral is kept with ``k = dummy_dihe_scaling * k`` in
-      the dummy state.  Rationale: the torsion couples the dummy group to the
-      non-unique atom, but when integrated over the free cyclic torsional DOF
-      of the dummy terminal atoms, the contribution to the partition function
-      is ``I₀(βk)`` — a constant independent of any non-unique atom's
-      position.  Therefore these dihedrals do **not** bias the equilibrium
-      distribution of core+env atoms and can be retained for numerical
-      stability of the dummy group's geometry.
-
-    Forbidden proper-dihedral patterns (not in LUT, raise ValueError)
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    * Unique atom at an *inner* position only: ``(i,u,j,k)`` and ``(i,j,u,k)``
-      where i,j,k ∈ {e,c} — the unique atom sits on the central bond with
-      core/env on both sides; this implies a bond directly between two separate
-      core fragments through a unique atom, which is not physically realizable
-      when core topology is fixed.
-    * ``c-u-u-c`` type: ``(i,u,u,j)`` where i,j ∈ {e,c} — the dummy group
-      would be anchored simultaneously to two distinct core atoms, violating
-      True Dummy separability (the dummy partition function cannot factorize
-      independently).
-    * Alternating patterns ``(u,i,u,j)`` and ``(i,u,j,u)`` — same reason as
-      above; they imply unique atoms connected to two separate core fragments.
+    The state is encoded by which list the entry belongs to; the force-builder
+    sets ``k0=k, k1=0`` for "A" entries and ``k0=0, k1=k`` for "B" entries
+    (adjusted by group-specific rules).
 
     Groups and target forces
     ------------------------
@@ -209,12 +194,13 @@ class DihedralInfo:
     +------------+-----------------------------+---------------------------------------------------+
     | group      | Target force                | k0 / k1 rule                                      |
     +============+=============================+===================================================+
-    | ``"env"``  | PeriodicTorsionForce        | Constant k; all 4 atoms env, non-rotatable.       |
-    +------------+-----------------------------+---------------------------------------------------+
-    | ``"break"``| CustomTorsionForce_A or _B  | k scales with ``lambda_dihedral_A/B``.            |
+    | ``"env"``  | PeriodicTorsionForce        | Constant k; all 4 atoms are env.  Parameters      |
+    |            |                             | identical in A and B — no lambda needed.          |
     +------------+-----------------------------+---------------------------------------------------+
     | ``"normal"``| CustomTorsionForce         | A-list: k0=k, k1=0.  B-list: k0=0, k1=k.        |
-    |            |                             | All atoms core/env; no unique atoms; not broken.  |
+    |            |                             | All atoms core/env (≥1 core); not broken.         |
+    +------------+-----------------------------+---------------------------------------------------+
+    | ``"break"``| CustomTorsionForce_A or _B  | k scales with ``lambda_dihedral_A/B``.            |
     +------------+-----------------------------+---------------------------------------------------+
     | ``"anchor"``| CustomTorsionForce         | A-list: k0=k, k1=0 (removed in dummy state B).   |
     |            |                             | B-list: k0=0, k1=k (removed in dummy state A).   |
@@ -226,7 +212,7 @@ class DihedralInfo:
     |            |                             |   or k (non-rotatable), k1=k.                     |
     |            |                             | 3u or 4u pattern; kept in dummy state because the |
     |            |                             | coupling integrates to a partition-function        |
-    |            |                             | constant (see Group classification above).        |
+    |            |                             | constant (I₀(βk)).                                |
     +------------+-----------------------------+---------------------------------------------------+
     | ``"dummy"``| CustomTorsionForce_harmonic | A-list: k0=k, k1=0 (unique_B restraint).          |
     |            |                             | B-list: k0=0, k1=k (unique_A restraint).          |
@@ -248,54 +234,82 @@ class DihedralInfo:
 
         k * (theta - phase)^2
 
-    REST2
-    -----
-    When ``is_rotatable=True`` and group is ``"env"`` or ``"normal"``, the
-    effective ``k`` may be multiplied by ``k_rest2`` at force-building time.
-    The ``k`` stored here is always the raw unscaled value.
-
     Attributes
     ----------
     atoms        : (at0, at1, at2, at3) in hybrid-topology indices.
     periodicity  : Torsion periodicity *n* (≥ 1).  Set to 0 for ``"dummy"``.
     phase        : Phase angle (radians) from this state's force field.
     k            : Raw force constant (kJ/mol) from this state.
-    is_proper    : ``True`` for proper dihedrals; ``False`` for impropers.
-    is_rotatable : ``True`` when the central bond ``at1–at2`` is in
-                   ``rotatable_bonds``.  Drives ``dummy_dihe_scaling``
-                   (``"uu"`` group) and REST2 scaling (``"env"``/``"normal"``).
-    group        : One of ``"env"``, ``"break"``, ``"normal"``, ``"anchor"``,
-                   ``"uu"``, ``"dummy"``.
+    group        : One of ``"normal"``, ``"break"``, ``"anchor"``, ``"uu"``,
+                   ``"dummy"``.
     """
-    atoms:        tuple[int, int, int, int]
-    periodicity:  int
-    phase:        float
-    k:            float
-    is_proper:    bool
+    atoms:       tuple[int, int, int, int]
+    periodicity: int
+    phase:       float
+    k:           float
+    group:       str
+
+
+def _dihe_cat(id_str: str) -> str:
+    """Collapse atom identity to ``"u"`` (unique_A/B) or ``"r"`` (core/env)."""
+    return "u" if id_str.startswith("unique") else "r"
+
+
+@dataclass(frozen=True)
+class ProperDihedralInfo(DihedralInfoBase):
+    """One proper torsion term in the hybrid topology, from a single end-state.
+
+    Atom ordering::
+
+        at0 — at1 — at2 — at3
+
+    The *central bond* is ``at1–at2``.
+
+    Broken-bond check
+    -----------------
+    ``group="break"`` when any bond in the linear span {at0–at1, at1–at2,
+    at2–at3} is in ``broken_bonds``.
+
+    Group classification
+    --------------------
+    Each atom's identity is collapsed to ``"r"`` (env or core) or ``"u"``
+    (unique_A or unique_B).  The key ``(_cat(at0), _cat(at1), _cat(at2),
+    _cat(at3))`` is looked up in ``_PROPER_DIHEDRAL_GROUP_LUT``.
+
+    Forbidden patterns (raise ``ValueError``)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    * Unique atom at an inner position only: ``(r,u,r,r)``, ``(r,r,u,r)``
+      — a unique atom on the central bond with real atoms on both ends implies
+      a bond between two separate real fragments through a unique atom.
+    * ``(r,u,u,r)`` and alternating ``(u,r,u,r)``, ``(r,u,r,u)`` — dummy
+      group anchored to two distinct real atoms violates True Dummy
+      separability.
+
+    REST2
+    -----
+    When ``is_rotatable=True`` and group is ``"normal"``, the effective ``k``
+    may be multiplied by ``k_rest2`` at force-building time.
+
+    Attributes
+    ----------
+    is_rotatable : ``True`` when ``(min(at1,at2), max(at1,at2))`` is in
+                   ``rotatable_bonds``.  Drives REST2 scaling and
+                   ``dummy_dihe_scaling`` for ``"uu"`` group.
+    """
     is_rotatable: bool
-    group:        str
 
     @classmethod
     def classify(
         cls,
-        atoms:          tuple[int, int, int, int],
-        periodicity:    int,
-        phase:          float,
-        k:              float,
-        is_proper:      bool,
-        broken_bonds:   set,
+        atoms:           tuple[int, int, int, int],
+        periodicity:     int,
+        phase:           float,
+        k:               float,
+        broken_bonds:    set,
         rotatable_bonds: set,
-        atom_identity:  dict,
-    ) -> "DihedralInfo":
-        """Create a ``DihedralInfo`` with the group automatically determined.
-
-        Use this factory for all regular (periodic) torsion terms from
-        ``molecule_system_A`` or ``molecule_system_B``.  Pass the
-        ``broken_bonds`` set that matches the list you are building into
-        (``broken_bonds_A`` for the "A" list, ``broken_bonds_B`` for "B").
-
-        Do **not** use this for dummy-restraint impropers; construct those
-        directly with ``group="dummy"``.
+        atom_identity:   dict,
+    ) -> "ProperDihedralInfo":
+        """Create a ``ProperDihedralInfo`` with the group automatically determined.
 
         Parameters
         ----------
@@ -303,15 +317,11 @@ class DihedralInfo:
             ``(at0, at1, at2, at3)`` in hybrid-topology indices.
         periodicity, phase, k :
             Torsion parameters from the source force field.
-        is_proper :
-            ``True`` for proper dihedrals; ``False`` for impropers.
         broken_bonds :
-            ``mapping.broken_bonds_A`` (when building the "A" list) or
-            ``mapping.broken_bonds_B`` (when building the "B" list).
-            Each element is a ``frozenset({i, j})``.
+            ``mapping.broken_bonds_A`` or ``broken_bonds_B`` as
+            ``frozenset({i, j})`` elements.
         rotatable_bonds :
-            ``self.rotatable_bonds`` — set of ``(min_idx, max_idx)`` tuples
-            in hybrid-topology index space.
+            Set of ``(min_idx, max_idx)`` tuples in hybrid-topology index space.
         atom_identity :
             ``mapping.atom_identity`` — maps hybrid index → ``"core"``,
             ``"env"``, ``"unique_A"``, or ``"unique_B"``.
@@ -322,61 +332,158 @@ class DihedralInfo:
         id2 = atom_identity[at2]
         id3 = atom_identity[at3]
 
-        cb_canonical = (min(at1, at2), max(at1, at2))
-        is_rotatable = cb_canonical in rotatable_bonds
+        is_rotatable = (min(at1, at2), max(at1, at2)) in rotatable_bonds
 
-        # Step 1 — broken-bond check
-        if is_proper:
-            span = [frozenset({at0, at1}), frozenset({at1, at2}), frozenset({at2, at3})]
-        else:
-            span = [
-                frozenset({at0, at1}), frozenset({at0, at2}),
-                frozenset({at1, at2}), frozenset({at2, at3}), frozenset({at1, at3}),
-            ]
+        span = [frozenset({at0, at1}), frozenset({at1, at2}), frozenset({at2, at3})]
         if any(b in broken_bonds for b in span):
             return cls(
                 atoms=atoms, periodicity=periodicity, phase=phase, k=k,
-                is_proper=is_proper, is_rotatable=is_rotatable, group="break",
+                group="break", is_rotatable=is_rotatable,
             )
 
-        # Step 2 — validate: unique_A and unique_B must not coexist in one dihedral
         ids = (id0, id1, id2, id3)
         if any(x == "unique_A" for x in ids) and any(x == "unique_B" for x in ids):
             raise ValueError(
-                f"Dihedral {atoms} spans both unique_A and unique_B atoms — "
-                f"identities: {id0},{id1},{id2},{id3}"
+                f"ProperDihedralInfo: dihedral {atoms} spans both unique_A and "
+                f"unique_B atoms — identities: {id0},{id1},{id2},{id3}"
             )
 
-        # Step 3 — look up group from _PROPER_DIHEDRAL_GROUP_LUT _IMPROPER_DIHEDRAL_GROUP_LUT
-        def _cat(id_str: str) -> str:
-            if id_str == "env":  return "e"
-            if id_str == "core": return "c"
-            return "u"
-
-        key = (_cat(id0), _cat(id1), _cat(id2), _cat(id3))
-        if is_proper:
-            if key not in _PROPER_DIHEDRAL_GROUP_LUT:
-                raise ValueError(
-                    f"DihedralInfo.classify: identity pattern {key} is not in "
-                    f"_PROPER_DIHEDRAL_GROUP_LUT for atoms {atoms} ({id0},{id1},{id2},{id3})"
-                )
-            group = _PROPER_DIHEDRAL_GROUP_LUT[key]
-        else:
-            if key not in _IMPROPER_DIHEDRAL_GROUP_LUT:
-                raise ValueError(
-                    f"DihedralInfo.classify: identity pattern {key} is not in "
-                    f"_IMPROPER_DIHEDRAL_GROUP_LUT for atoms {atoms} ({id0},{id1},{id2},{id3})"
-                )
-            group = _IMPROPER_DIHEDRAL_GROUP_LUT[key]
+        key = (_dihe_cat(id0), _dihe_cat(id1), _dihe_cat(id2), _dihe_cat(id3))
+        if key not in _PROPER_DIHEDRAL_GROUP_LUT:
+            raise ValueError(
+                f"ProperDihedralInfo: pattern {key} not in "
+                f"_PROPER_DIHEDRAL_GROUP_LUT for atoms {atoms} ({id0},{id1},{id2},{id3})"
+            )
+        group = _PROPER_DIHEDRAL_GROUP_LUT[key]
+        if group is None:
+            raise ValueError(
+                f"ProperDihedralInfo: pattern {key} is forbidden for atoms "
+                f"{atoms} ({id0},{id1},{id2},{id3})"
+            )
+        if group == "normal" and all(x == "env" for x in (id0, id1, id2, id3)):
+            group = "env"
 
         return cls(
-            atoms=atoms,
-            periodicity=periodicity,
-            phase=phase,
-            k=k,
-            is_proper=is_proper,
-            is_rotatable=is_rotatable,
-            group=group,
+            atoms=atoms, periodicity=periodicity, phase=phase, k=k,
+            group=group, is_rotatable=is_rotatable,
+        )
+
+
+@dataclass(frozen=True)
+class ImproperDihedralInfo(DihedralInfoBase):
+    """One improper torsion term in the hybrid topology, from a single end-state.
+
+    Atom ordering
+    -------------
+    ``atoms = (at0, at1, at2, at3)`` in hybrid-topology indices.  Any of the
+    four positions may be the hub (centre atom bonded to all three others);
+    the hub is detected from ``bond_set`` at classify time and stored in
+    ``hub``.
+
+    Broken-bond check
+    -----------------
+    ``group="break"`` when any of the three hub→outer bonds is in
+    ``broken_bonds``.  Bonds between outer atoms are **not** checked — they
+    are not part of this improper's star topology.
+
+    Group classification
+    --------------------
+    Each atom's identity is collapsed to ``"r"`` (env or core) or ``"u"``
+    (unique_A or unique_B).  The key
+    ``(_cat(hub), (_cat(outer0), _cat(outer1), _cat(outer2)))`` — where outer
+    atoms are in their original positional order within ``atoms`` — is looked
+    up in ``_IMPROPER_DIHEDRAL_STAR_GROUP_LUT``.  All 8 outer-atom orderings
+    are listed explicitly in the LUT so no sorting is needed.
+
+    Forbidden patterns (raise ``ValueError``)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    * Dummy hub bonded to 2+ real outer atoms — the dummy group would be
+      geometrically constrained by two independent real fragments, violating
+      True Dummy separability.
+
+    Attributes
+    ----------
+    hub : Hybrid index of the hub atom (detected from bond_set).
+    """
+    hub: int
+
+    @classmethod
+    def classify(
+        cls,
+        atoms:        tuple[int, int, int, int],
+        periodicity:  int,
+        phase:        float,
+        k:            float,
+        broken_bonds: set,
+        atom_identity: dict,
+        bond_set:     set,
+    ) -> "ImproperDihedralInfo":
+        """Create an ``ImproperDihedralInfo`` with the group automatically determined.
+
+        Parameters
+        ----------
+        atoms :
+            ``(at0, at1, at2, at3)`` in hybrid-topology indices.
+        periodicity, phase, k :
+            Torsion parameters from the source force field.
+        broken_bonds :
+            ``mapping.broken_bonds_A`` or ``broken_bonds_B`` as
+            ``frozenset({i, j})`` elements.
+        atom_identity :
+            ``mapping.atom_identity`` — maps hybrid index → ``"core"``,
+            ``"env"``, ``"unique_A"``, or ``"unique_B"``.
+        bond_set :
+            All bonds + constraints in the end-state system as
+            ``frozenset({i, j})`` pairs in hybrid-topology index space.
+            Used to detect the hub atom of the star topology.
+        """
+        # Detect hub — atom bonded to all three others
+        hub = next(
+            (a for a in atoms
+             if all(frozenset({a, o}) in bond_set for o in atoms if o != a)),
+            None,
+        )
+        if hub is None:
+            raise ValueError(
+                f"ImproperDihedralInfo: cannot find hub atom for improper "
+                f"dihedral {atoms} — verify bond_set is complete"
+            )
+
+        # Break check: only hub→outer bonds belong to this star
+        outers = [a for a in atoms if a != hub]
+        if any(frozenset({hub, o}) in broken_bonds for o in outers):
+            return cls(
+                atoms=atoms, periodicity=periodicity, phase=phase, k=k,
+                group="break", hub=hub,
+            )
+
+        ids = tuple(atom_identity[a] for a in atoms)
+        if any(x == "unique_A" for x in ids) and any(x == "unique_B" for x in ids):
+            raise ValueError(
+                f"ImproperDihedralInfo: dihedral {atoms} spans both unique_A "
+                f"and unique_B atoms"
+            )
+
+        hub_cat = _dihe_cat(atom_identity[hub])
+        outer_cats = tuple(_dihe_cat(atom_identity[a]) for a in atoms if a != hub)
+        key = (hub_cat, outer_cats)
+        if key not in _IMPROPER_DIHEDRAL_STAR_GROUP_LUT:
+            raise ValueError(
+                f"ImproperDihedralInfo: pattern {key} not in "
+                f"_IMPROPER_DIHEDRAL_STAR_GROUP_LUT for atoms {atoms}"
+            )
+        group = _IMPROPER_DIHEDRAL_STAR_GROUP_LUT[key]
+        if group is None:
+            raise ValueError(
+                f"ImproperDihedralInfo: pattern {key} is forbidden — dummy hub "
+                f"bonded to 2+ real atoms for atoms {atoms}"
+            )
+        if group == "normal" and all(atom_identity[a] == "env" for a in atoms):
+            group = "env"
+
+        return cls(
+            atoms=atoms, periodicity=periodicity, phase=phase, k=k,
+            group=group, hub=hub,
         )
 
 
@@ -1078,7 +1185,8 @@ class HybridRest2TopologyFactoryBase:
         self._prepare_bond()                  # Add Forces for bond
         self._prepare_dummy_anchoring_point()
         self._prepare_angle()
-        self.hybrid_dihedral_info={} # for dihedral at0,at1,at2,at3 (min(at1,at2),max()):{"A":[DihedralInfo, ...], "B":[]}
+        self.hybrid_proper_dihedral_info:   dict[tuple[int, int], dict[str, list[ProperDihedralInfo]]]   = {}
+        self.hybrid_improper_dihedral_info: dict[int,             dict[str, list[ImproperDihedralInfo]]] = {}
         self._prepare_dihe()
 
 
@@ -1823,36 +1931,60 @@ class HybridRest2TopologyFactoryBase:
         """
         mapping = self.index_mapping
 
-        # ── Step 1: classify every end-state dihedral into hybrid_dihedral_info ──
+        # ── Step 1: classify every end-state dihedral ──
         #
         # broken_bonds_A/B are lists of (hybrid_i, hybrid_j) tuples (already in
-        # hybrid index space).  DihedralInfo.classify() needs frozensets for O(1)
+        # hybrid index space).  classify() needs frozensets for O(1)
         # membership tests across the span of each dihedral.
         broken_A = {frozenset(pair) for pair in mapping.broken_bonds_A}
         broken_B = {frozenset(pair) for pair in mapping.broken_bonds_B}
 
+        def _build_bond_set(ms, map_to_hybrid):
+            """All bonds + constraints in hybrid-index space, as frozensets."""
+            bs = {
+                frozenset({map_to_hybrid[t.atoms[0]], map_to_hybrid[t.atoms[1]]})
+                for t in ms.bonds
+            }
+            bs |= {
+                frozenset({map_to_hybrid[t.atoms[0]], map_to_hybrid[t.atoms[1]]})
+                for t in ms.constraints_list
+            }
+            return bs
+
         def _collect(ms, map_to_hybrid, broken_bonds, state_key):
-            for is_proper, table in [
-                (True,  ms.proper_dihedrals),
-                (False, ms.improper_dihedrals),
-            ]:
-                for t in table:
-                    h0, h1, h2, h3 = (map_to_hybrid[a] for a in t.atoms)
-                    p = t.potential.parameters
-                    info = DihedralInfo.classify(
-                        atoms=(h0, h1, h2, h3),
-                        periodicity=p["periodicity"],
-                        phase=p["phase"],
-                        k=p["k"],
-                        is_proper=is_proper,
-                        broken_bonds=broken_bonds,
-                        rotatable_bonds=self.rotatable_bonds,
-                        atom_identity=mapping.atom_identity,
-                    )
-                    cb_key = (min(h1, h2), max(h1, h2))
-                    if cb_key not in self.hybrid_dihedral_info:
-                        self.hybrid_dihedral_info[cb_key] = {"A": [], "B": []}
-                    self.hybrid_dihedral_info[cb_key][state_key].append(info)
+            bond_set = _build_bond_set(ms, map_to_hybrid)
+            for t in ms.proper_dihedrals:
+                h0, h1, h2, h3 = (map_to_hybrid[a] for a in t.atoms)
+                p = t.potential.parameters
+                info = ProperDihedralInfo.classify(
+                    atoms=(h0, h1, h2, h3),
+                    periodicity=p["periodicity"],
+                    phase=p["phase"],
+                    k=p["k"],
+                    broken_bonds=broken_bonds,
+                    rotatable_bonds=self.rotatable_bonds,
+                    atom_identity=mapping.atom_identity,
+                )
+                cb_key = (min(h1, h2), max(h1, h2))
+                if cb_key not in self.hybrid_proper_dihedral_info:
+                    self.hybrid_proper_dihedral_info[cb_key] = {"A": [], "B": []}
+                self.hybrid_proper_dihedral_info[cb_key][state_key].append(info)
+            for t in ms.improper_dihedrals:
+                h0, h1, h2, h3 = (map_to_hybrid[a] for a in t.atoms)
+                p = t.potential.parameters
+                info = ImproperDihedralInfo.classify(
+                    atoms=(h0, h1, h2, h3),
+                    periodicity=p["periodicity"],
+                    phase=p["phase"],
+                    k=p["k"],
+                    broken_bonds=broken_bonds,
+                    atom_identity=mapping.atom_identity,
+                    bond_set=bond_set,
+                )
+                hub_key = info.hub
+                if hub_key not in self.hybrid_improper_dihedral_info:
+                    self.hybrid_improper_dihedral_info[hub_key] = {"A": [], "B": []}
+                self.hybrid_improper_dihedral_info[hub_key][state_key].append(info)
 
         _collect(self.molecule_system_A, mapping.map_A_to_hybrid, broken_A, "A")
         _collect(self.molecule_system_B, mapping.map_B_to_hybrid, broken_B, "B")
