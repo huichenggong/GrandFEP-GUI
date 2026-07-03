@@ -129,6 +129,35 @@ def check_bond_angle(h_factory, systemA, topA, systemB, topB, test_case):
         f"Total extra force from unique_A angle terms != 0: {f_extra_B}")
 
 
+def check_number_of_dihedral(systemA, systemB, h_factory, test_case):
+    ptf_A = next(
+        f for f in (systemA.getForce(i) for i in range(systemA.getNumForces()))
+        if isinstance(f, openmm.PeriodicTorsionForce)
+    )
+    ptf_B = next(
+        f for f in (systemB.getForce(i) for i in range(systemB.getNumForces()))
+        if isinstance(f, openmm.PeriodicTorsionForce)
+    )
+    n_src_A, n_src_B = ptf_A.getNumTorsions(), ptf_B.getNumTorsions()
+    n_classified_A = (
+            sum(len(v["A"]) for v in h_factory.hybrid_proper_dihedral_info.values())
+            + sum(len(v["A"]) for v in h_factory.hybrid_improper_dihedral_info.values())
+    )
+    n_classified_B = (
+            sum(len(v["B"]) for v in h_factory.hybrid_proper_dihedral_info.values())
+            + sum(len(v["B"]) for v in h_factory.hybrid_improper_dihedral_info.values())
+    )
+    test_case.assertEqual(
+        n_src_A, n_classified_A,
+        f"systemA has {n_src_A} torsion terms but "
+        f"hybrid_dihedral_info['A'] has {n_classified_A}"
+    )
+    test_case.assertEqual(
+        n_src_B, n_classified_B,
+        f"systemB has {n_src_B} torsion terms but "
+        f"hybrid_dihedral_info['A'] has {n_classified_B}"
+    )
+
 class MyTestCase(unittest.TestCase):
     def test_hybrid_constraint_check(self):
         ligand_path = base / "public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/waterset/hsp90_woodhead/"
@@ -324,7 +353,8 @@ class MyTestCase(unittest.TestCase):
         self.assertEqual(len(cA_angles_41), 0)
         self.assertEqual(len(cB_angles_41), 5) # bond 21-41 is broken, 41 is a -CH2-, 21 is a -NH-. H-C21-N41 x2, C-C21-N41, C41-N21-C, C41-N21-N
 
-        print("## Dihedral Info")
+        print(f"### Check Number of Dihedral entry")
+        check_number_of_dihedral(systemA, systemB, h_factory, self)
 
 
     def test_hybrid_rest2_hspw_edge_2_3(self):
@@ -410,40 +440,14 @@ class MyTestCase(unittest.TestCase):
                 app.PDBFile.writeFile(h_factory.index_mapping.hybrid_top, h_factory.get_hybrid_position(0), f)
 
             print(f"### Check Number of Dihedral entry")
-            ptf_A = next(
-                f for f in (systemA.getForce(i) for i in range(systemA.getNumForces()))
-                if isinstance(f, openmm.PeriodicTorsionForce)
-            )
-            ptf_B = next(
-                f for f in (systemB.getForce(i) for i in range(systemB.getNumForces()))
-                if isinstance(f, openmm.PeriodicTorsionForce)
-            )
-            n_src_A, n_src_B = ptf_A.getNumTorsions(), ptf_B.getNumTorsions()
-            n_classified_A = (
-                sum(len(v["A"]) for v in h_factory.hybrid_proper_dihedral_info.values())
-                + sum(len(v["A"]) for v in h_factory.hybrid_improper_dihedral_info.values())
-            )
-            n_classified_B = (
-                    sum(len(v["B"]) for v in h_factory.hybrid_proper_dihedral_info.values())
-                    + sum(len(v["B"]) for v in h_factory.hybrid_improper_dihedral_info.values())
-            )
-            self.assertEqual(
-                n_src_A, n_classified_A,
-                f"{edge}: systemA has {n_src_A} torsion terms but "
-                f"hybrid_dihedral_info['A'] has {n_classified_A}"
-            )
-            self.assertEqual(
-                n_src_B, n_classified_B,
-                f"{edge}: systemB has {n_src_B} torsion terms but "
-                f"hybrid_dihedral_info['A'] has {n_classified_B}"
-            )
+            check_number_of_dihedral(systemA, systemB, h_factory, self)
 
             
             if edge == "edge_0_6":
                 pass
     
     def test_improper_dihedral_star_LUT(self):
-        print("\n_IMPROPER_DIHEDRAL_STAR_GROUP_LUT covers all star-topology cases correctly.")
+        print("\n# check _IMPROPER_DIHEDRAL_STAR_GROUP_LUT covers ")
         from grandfep.hybrid_topology import hybrid_factory
 
         lut = hybrid_factory._IMPROPER_DIHEDRAL_STAR_GROUP_LUT
@@ -468,7 +472,7 @@ class MyTestCase(unittest.TestCase):
 
 
     def test_dihedral_LUT(self):
-        print("\n_PROPER_DIHEDRAL_GROUP_LUT covers all 16 (r/u)^4 patterns correctly.")
+        print("\n# Check _PROPER_DIHEDRAL_GROUP_LUT covers all 16 (r/u)^4 patterns correctly.")
         from grandfep.hybrid_topology import hybrid_factory
 
         lut = hybrid_factory._PROPER_DIHEDRAL_GROUP_LUT
