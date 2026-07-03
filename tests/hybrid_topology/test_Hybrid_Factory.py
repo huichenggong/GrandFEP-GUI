@@ -356,6 +356,24 @@ class MyTestCase(unittest.TestCase):
         print(f"### Check Number of Dihedral entry")
         check_number_of_dihedral(systemA, systemB, h_factory, self)
 
+        # All the SP2 carbon has the same improper in A and B
+        for hybrid_idx in [6, 8, 10, 11, 12, 13, 14, 15]:
+            improper_AB = h_factory.hybrid_improper_dihedral_info[hybrid_idx]
+            self.assertEqual(improper_AB["A"][0].atoms, improper_AB["B"][0].atoms,
+                             f"improper on {hybrid_idx} are not the same in A and B")
+            self.assertSetEqual(set(improper_AB["A"][0].atoms) - {improper_AB["A"][0].hub},
+                                set(improper_AB["B"][0].atoms) - {improper_AB["B"][0].hub})
+
+        for hybrid_idx in [3, 4, 5, 17, 19, 20, 6, 8, 10, 11, 12, 13, 14, 15]:
+            improper_AB = h_factory.hybrid_improper_dihedral_info[hybrid_idx]
+            self.assertEqual(len(improper_AB["A"]), 1)
+            self.assertEqual(len(improper_AB["B"]), 1)
+            self.assertEqual(improper_AB["A"][0].periodicity, improper_AB["B"][0].periodicity)
+            self.assertEqual(improper_AB["A"][0].group, "normal")
+            self.assertEqual(improper_AB["B"][0].group, "normal")
+            self.assertListEqual([improper_AB["A"][0].phase, improper_AB["A"][0].k],
+                                 [improper_AB["B"][0].phase, improper_AB["B"][0].k])
+
 
     def test_hybrid_rest2_hspw_edge_2_3(self):
         print("\n hsp90 woodhead, break a bond in state A")
