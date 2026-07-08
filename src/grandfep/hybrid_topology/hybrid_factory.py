@@ -1182,13 +1182,20 @@ class HybridRest2TopologyFactoryBase:
             "unique_B": {},  # {unique_B_hybrid_idx: {"angles": [AngleTerm, ...], "impropers": [DihedralTerm, ...]}}
         }
         self._prepare_system()                # Add particle, constraint, virtual site, default box vector
+
+        # bond, not affected by REST2
         self._prepare_bond()                  # Add Forces for bond
         self._prepare_dummy_anchoring_point()
+
+        # angle, also not affected by REST2
         self._prepare_angle()
+
+        # dihedral
         self.hybrid_proper_dihedral_info:   dict[tuple[int, int], dict[str, list[ProperDihedralInfo]]]   = {}
         self.hybrid_improper_dihedral_info: dict[int,             dict[str, list[ImproperDihedralInfo]]] = {}
         self._prepare_dihe()
 
+        # base class skips nonbonded.
 
 
 
@@ -1996,8 +2003,17 @@ class HybridRest2TopologyFactory(HybridRest2TopologyFactoryBase):
     """
     XXX
     """
-    def __init__(self):
-        HybridRest2TopologyFactoryBase.__init__(self)
+    def __init__(self,
+                 system_A, position_A, rotatable_A,
+                 system_B, position_B, rotatable_B,
+                 index_mapping: HybridIndexMapping, softcore_alpha=0.5, soft_bond_alpha=2
+                 ):
+        super().__init__(self,
+                         system_A, position_A, rotatable_A,
+                         system_B, position_B, rotatable_B,
+                         index_mapping, softcore_alpha, soft_bond_alpha
+        )
+        self._prepare_nonbonded()
 
     def _prepare_nonbonded(self):
         pass
@@ -2008,8 +2024,17 @@ class HybridRest2TopologyFactoryWaterSwap(HybridRest2TopologyFactoryBase):
     XXX
     """
 
-    def __init__(self):
-        HybridRest2TopologyFactoryBase.__init__(self)
+    def __init__(self,
+                 system_A, position_A, rotatable_A,
+                 system_B, position_B, rotatable_B,
+                 index_mapping: HybridIndexMapping, softcore_alpha=0.5, soft_bond_alpha=2
+                 ):
+        super().__init__(self,
+                         system_A, position_A, rotatable_A,
+                         system_B, position_B, rotatable_B,
+                         index_mapping, softcore_alpha, soft_bond_alpha
+                         )
+        self._prepare_nonbonded()
 
     def _prepare_nonbonded(self):
         pass
@@ -2020,8 +2045,17 @@ class HybridRest2TopologyFactoryWaterIonSwap(HybridRest2TopologyFactoryBase):
     XXX
     """
 
-    def __init__(self):
-        HybridRest2TopologyFactoryBase.__init__(self)
+    def __init__(self,
+                 system_A, position_A, rotatable_A,
+                 system_B, position_B, rotatable_B,
+                 index_mapping: HybridIndexMapping, softcore_alpha=0.5, soft_bond_alpha=2
+                 ):
+        super().__init__(self,
+                         system_A, position_A, rotatable_A,
+                         system_B, position_B, rotatable_B,
+                         index_mapping, softcore_alpha, soft_bond_alpha
+                         )
+        self._prepare_nonbonded()
 
     def _prepare_nonbonded(self):
         pass
@@ -2033,5 +2067,4 @@ class HybridRest2TopologyFactoryWaterIonSwap(HybridRest2TopologyFactoryBase):
 
 # ABFE REST2
 
-# help function
 
