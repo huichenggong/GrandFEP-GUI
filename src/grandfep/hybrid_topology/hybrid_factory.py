@@ -230,9 +230,10 @@ class DihedralInfoBase:
 
         k * (1 + cos(periodicity * theta - phase))
 
-    ``"dummy"`` uses the harmonic form (``periodicity`` unused, set to 0)::
+    ``"dummy"`` uses the harmonic form with minimum-image wrapping
+    (``periodicity`` unused, set to 0)::
 
-        k * (theta - phase)^2
+        k * min(dthe, 2*pi-dthe)^2;  dthe = abs(theta - phase)
 
     Attributes
     ----------
@@ -1153,7 +1154,8 @@ class HybridRest2TopologyFactoryBase:
     def __init__(self,
                  system_A, position_A, rotatable_A,
                  system_B, position_B, rotatable_B,
-                 index_mapping: HybridIndexMapping, softcore_alpha=0.5, soft_bond_alpha=2
+                 index_mapping: HybridIndexMapping, softcore_alpha=0.5, soft_bond_alpha=2,
+                 dummy_dihe_scaling=0.0,
                  ):
         self.index_mapping = index_mapping
         self.position_A = position_A
@@ -1162,6 +1164,7 @@ class HybridRest2TopologyFactoryBase:
         self._system_B = system_B
         self.softcore_alpha = softcore_alpha
         self.soft_bond_alpha = soft_bond_alpha
+        self.dummy_dihe_scaling = dummy_dihe_scaling
 
         self.molecule_system_A = hybrid_topology.MolecularSystem().gen_from_openmm_system(system_A, index_mapping.topologyA)
         self.molecule_system_B = hybrid_topology.MolecularSystem().gen_from_openmm_system(system_B, index_mapping.topologyB)
@@ -1996,7 +1999,110 @@ class HybridRest2TopologyFactoryBase:
         _collect(self.molecule_system_A, mapping.map_A_to_hybrid, broken_A, "A")
         _collect(self.molecule_system_B, mapping.map_B_to_hybrid, broken_B, "B")
 
-        # step2 set up forces
+        # ── Step 2: build forces ──────────────────────────────────────────────
+        dds = self.dummy_dihe_scaling
+
+        # Force 1 — static env terms (all-env atoms, params identical in A and B)
+        ptf = openmm.PeriodicTorsionForce()
+        ptf.setName("PeriodicTorsionForce_dihe")
+
+        # Force 2 — alchemical: "normal", "anchor", "uu"
+        # k0 is the force constant at lambda=0 (state A), k1 at lambda=1 (state B)
+        ctf = openmm.CustomTorsionForce(
+            "(k0*(1-lambda_dihedral) + k1*lambda_dihedral) * (1 + cos(n*theta - phase))"
+        )
+        ctf.setName("CustomTorsionForce_dihe")
+        ctf.addGlobalParameter("lambda_dihedral", 0.0)
+        for p in ("k0", "k1", "n", "phase"):
+            ctf.addPerTorsionParameter(p)
+
+        # Force 3 — "break" A-list: present in A, absent in B; fully on at lambda=0
+        ctf_A = openmm.CustomTorsionForce(
+            "lambda_dihedral_A * k * (1 + cos(n*theta - phase))"
+        )
+        ctf_A.setName("CustomTorsionForce_dihe_A")
+        ctf_A.addGlobalParameter("lambda_dihedral_A", 1.0)
+        for p in ("k", "n", "phase"):
+            ctf_A.addPerTorsionParameter(p)
+
+        # Force 4 — "break" B-list: absent in A, present in B; fully on at lambda=1
+        ctf_B = openmm.CustomTorsionForce(
+            "lambda_dihedral_B * k * (1 + cos(n*theta - phase))"
+        )
+        ctf_B.setName("CustomTorsionForce_dihe_B")
+        ctf_B.addGlobalParameter("lambda_dihedral_B", 0.0)
+        for p in ("k", "n", "phase"):
+            ctf_B.addPerTorsionParameter(p)
+
+        # Force 5 — harmonic dummy restraint impropers from _prepare_dummy_anchoring_point
+        # min(dthe, 2*pi-dthe) picks the shorter arc in [0,pi] (minimum-image convention).
+        ctf_harm = openmm.CustomTorsionForce(
+            "(k0*(1-lambda_dihedral) + k1*lambda_dihedral) * min(dthe, 2*pi-dthe)^2;"
+            " dthe = abs(theta - theta0);"
+            " pi = 3.1415926535"
+        )
+        ctf_harm.setName("CustomTorsionForce_dihe_harmonic")
+        ctf_harm.addGlobalParameter("lambda_dihedral", 0.0)
+        for p in ("k0", "k1", "theta0"):
+            ctf_harm.addPerTorsionParameter(p)
+
+        def _add_term(info: ProperDihedralInfo | ImproperDihedralInfo, state_key: str):
+            at0, at1, at2, at3 = info.atoms
+            k, n, phase = info.k, info.periodicity, info.phase
+            g = info.group
+            is_rotatable = getattr(info, "is_rotatable", False)
+
+            if g == "env":
+                ptf.addTorsion(at0, at1, at2, at3, n, phase, k)
+            elif g == "break":
+                target = ctf_A if state_key == "A" else ctf_B
+                target.addTorsion(at0, at1, at2, at3, [k, n, phase])
+            elif g in ("normal", "anchor"):
+                if state_key == "A":
+                    ctf.addTorsion(at0, at1, at2, at3, [k, 0.0, n, phase])
+                else:
+                    ctf.addTorsion(at0, at1, at2, at3, [0.0, k, n, phase])
+            elif g == "uu":
+                is_improper = isinstance(info, ImproperDihedralInfo)
+                scaled = k if (is_improper or not is_rotatable) else dds * k
+                if state_key == "A":
+                    ctf.addTorsion(at0, at1, at2, at3, [k, scaled, n, phase])
+                else:
+                    ctf.addTorsion(at0, at1, at2, at3, [scaled, k, n, phase])
+            else:
+                raise ValueError(f"_prepare_dihe: unexpected group '{g}' in {info}")
+
+        for ab_lists in self.hybrid_proper_dihedral_info.values():
+            for state_key, entries in ab_lists.items():
+                for info in entries:
+                    _add_term(info, state_key)
+
+        for ab_lists in self.hybrid_improper_dihedral_info.values():
+            for state_key, entries in ab_lists.items():
+                for info in entries:
+                    _add_term(info, state_key)
+
+        # Dummy harmonic improper restraints (group="dummy") from _prepare_dummy_anchoring_point.
+        # unique_A restraints turn ON as lambda → 1 (state B, where unique_A is dummy)
+        for entry in self.dummy_restraint["unique_A"].values():
+            for dterm in entry["impropers"]:
+                at0, at1, at2, at3 = dterm.atoms
+                k     = dterm.potential.parameters["k"]
+                phase = dterm.potential.parameters["phase"]
+                ctf_harm.addTorsion(at0, at1, at2, at3, [0.0, k, phase])
+        # unique_B restraints turn ON as lambda → 0 (state A, where unique_B is dummy)
+        for entry in self.dummy_restraint["unique_B"].values():
+            for dterm in entry["impropers"]:
+                at0, at1, at2, at3 = dterm.atoms
+                k     = dterm.potential.parameters["k"]
+                phase = dterm.potential.parameters["phase"]
+                ctf_harm.addTorsion(at0, at1, at2, at3, [k, 0.0, phase])
+
+        self.system.addForce(ptf)
+        self.system.addForce(ctf)
+        self.system.addForce(ctf_A)
+        self.system.addForce(ctf_B)
+        self.system.addForce(ctf_harm)
 
 
 class HybridRest2TopologyFactory(HybridRest2TopologyFactoryBase):
@@ -2006,12 +2112,14 @@ class HybridRest2TopologyFactory(HybridRest2TopologyFactoryBase):
     def __init__(self,
                  system_A, position_A, rotatable_A,
                  system_B, position_B, rotatable_B,
-                 index_mapping: HybridIndexMapping, softcore_alpha=0.5, soft_bond_alpha=2
+                 index_mapping: HybridIndexMapping, softcore_alpha=0.5, soft_bond_alpha=2,
+                 dummy_dihe_scaling=0.0,
                  ):
         super().__init__(self,
                          system_A, position_A, rotatable_A,
                          system_B, position_B, rotatable_B,
-                         index_mapping, softcore_alpha, soft_bond_alpha
+                         index_mapping, softcore_alpha, soft_bond_alpha,
+                         dummy_dihe_scaling
         )
         self._prepare_nonbonded()
 

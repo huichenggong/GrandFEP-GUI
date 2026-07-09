@@ -158,6 +158,98 @@ def check_number_of_dihedral(systemA, systemB, h_factory, test_case):
         f"hybrid_dihedral_info['A'] has {n_classified_B}"
     )
 
+def check_dihedral(h_factory, systemA, topA, systemB, topB, test_case):
+    """Dihedral force check for env+core atoms ≥2 bonds from any unique atom.
+
+    Two sources of atoms must be excluded per state:
+
+    1. ctf_harm (dummy improper restraints):
+       - unique_B restraints (k0=k, k1=0) are active at lambda=0 → excluded from A check.
+       - unique_A restraints (k0=0, k1=k) are active at lambda=1 → excluded from B check.
+
+    2. uu group dihedrals with non-zero scaled k (non-rotatable proper uu or any uu
+       improper): these retain their full force constant at the 'wrong' endpoint.
+       - B-list uu with nonzero k0 → extra force at lambda=0 → excluded from A check.
+       - A-list uu with nonzero k1 → extra force at lambda=1 → excluded from B check.
+    """
+    print("## Dihedral")
+
+    def _uu_nonzero_scaled(info):
+        """True when the scaled k for a uu term is non-zero at the wrong endpoint."""
+        if not hasattr(info, 'is_rotatable'):   # ImproperDihedralInfo has no is_rotatable
+            return True           # improper uu: scaled = k always
+        return not info.is_rotatable   # proper uu: scaled = k if non-rotatable
+
+    # B-list uu with nonzero k0  →  active at lambda=0 (state A check).
+    uu_active_A: set[int] = set()
+    for ab_lists in h_factory.hybrid_proper_dihedral_info.values():
+        for info in ab_lists["B"]:
+            if info.group == "uu" and _uu_nonzero_scaled(info):
+                uu_active_A.update(info.atoms)
+    for ab_lists in h_factory.hybrid_improper_dihedral_info.values():
+        for info in ab_lists["B"]:
+            if info.group == "uu":
+                uu_active_A.update(info.atoms)
+
+    # A-list uu with nonzero k1  →  active at lambda=1 (state B check).
+    uu_active_B: set[int] = set()
+    for ab_lists in h_factory.hybrid_proper_dihedral_info.values():
+        for info in ab_lists["A"]:
+            if info.group == "uu" and _uu_nonzero_scaled(info):
+                uu_active_B.update(info.atoms)
+    for ab_lists in h_factory.hybrid_improper_dihedral_info.values():
+        for info in ab_lists["A"]:
+            if info.group == "uu":
+                uu_active_B.update(info.atoms)
+
+    # ctf_harm: unique_B (k0=k) active at lambda=0; unique_A (k1=k) active at lambda=1.
+    ctf_harm_A: set[int] = set()
+    for entry in h_factory.dummy_restraint["unique_B"].values():
+        for dterm in entry["impropers"]:
+            ctf_harm_A.update(dterm.atoms)
+    ctf_harm_B: set[int] = set()
+    for entry in h_factory.dummy_restraint["unique_A"].values():
+        for dterm in entry["impropers"]:
+            ctf_harm_B.update(dterm.atoms)
+
+    map_to_A = h_factory.index_mapping.map_hybrid_to_A
+    map_to_B = h_factory.index_mapping.map_hybrid_to_B
+    excluded_A = sorted({map_to_A[at] for at in (ctf_harm_A | uu_active_A) if at in map_to_A})
+    excluded_B = sorted({map_to_B[at] for at in (ctf_harm_B | uu_active_B) if at in map_to_B})
+
+    sys_A_dihe   = separate_force(systemA, ["PeriodicTorsionForce"])
+    sys_B_dihe   = separate_force(systemB, ["PeriodicTorsionForce"])
+    sys_hyb_dihe = separate_force(h_factory.system, [
+        "PeriodicTorsionForce_dihe",
+        "CustomTorsionForce_dihe",
+        "CustomTorsionForce_dihe_A",
+        "CustomTorsionForce_dihe_B",
+        "CustomTorsionForce_dihe_harmonic",
+    ])
+
+    reorder_h_2_A = [h_factory.index_mapping.map_A_to_hybrid[i] for i in range(systemA.getNumParticles())]
+    reorder_h_2_B = [h_factory.index_mapping.map_B_to_hybrid[i] for i in range(systemB.getNumParticles())]
+
+    # ---- State A (lambda_dihedral=0 by default) ----
+    print("### State A")
+    pos_hyb_A = h_factory.get_hybrid_position(0)
+    pos_A = [pos_hyb_A[h_factory.index_mapping.map_A_to_hybrid[i]] for i in range(systemA.getNumParticles())]
+    _, forceA_dihe = calc_energy_force(sys_A_dihe, topA, pos_A)
+    _, forceH_A   = calc_energy_force(sys_hyb_dihe, h_factory.index_mapping.hybrid_top, pos_hyb_A)
+    all_close, _, error_msg = match_force(forceA_dihe, forceH_A[reorder_h_2_A], excluded_list=excluded_A)
+    test_case.assertTrue(all_close, "Dihedral state A\n" + error_msg)
+
+    # ---- State B (lambda_dihedral=1) ----
+    print("### State B")
+    gp_B = {"lambda_dihedral": 1.0, "lambda_dihedral_A": 0.0, "lambda_dihedral_B": 1.0}
+    pos_hyb_B = h_factory.get_hybrid_position(1)
+    pos_B = [pos_hyb_B[h_factory.index_mapping.map_B_to_hybrid[i]] for i in range(systemB.getNumParticles())]
+    _, forceB_dihe = calc_energy_force(sys_B_dihe, topB, pos_B)
+    _, forceH_B   = calc_energy_force(sys_hyb_dihe, h_factory.index_mapping.hybrid_top, pos_hyb_B, global_parameters=gp_B)
+    all_close, _, error_msg = match_force(forceB_dihe, forceH_B[reorder_h_2_B], excluded_list=excluded_B)
+    test_case.assertTrue(all_close, "Dihedral state B\n" + error_msg)
+
+
 class MyTestCase(unittest.TestCase):
     def test_hybrid_constraint_check(self):
         ligand_path = base / "public_binding_free_energy_benchmark/fep_benchmark_inputs/structure_inputs/waterset/hsp90_woodhead/"
@@ -459,10 +551,7 @@ class MyTestCase(unittest.TestCase):
 
             print(f"### Check Number of Dihedral entry")
             check_number_of_dihedral(systemA, systemB, h_factory, self)
-
-            
-            if edge == "edge_0_6":
-                pass
+            check_dihedral(h_factory, systemA, topA, systemB, topB, self)
     
     def test_improper_dihedral_star_LUT(self):
         print("\n# check _IMPROPER_DIHEDRAL_STAR_GROUP_LUT covers ")
