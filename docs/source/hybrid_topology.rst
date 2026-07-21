@@ -201,13 +201,70 @@ in only one end state) and builds the merged ``hybrid_top`` topology.
    :show-inheritance:
 
 :class:`HybridRest2TopologyFactoryBase` is the base class for building hybrid
-REST2 RBFE systems. Only bonded interaction is handled in this based class,
-Nonbonded interaction will differ because of water-swap or ion-swap.
+REST2 RBFE systems.  It builds the full **bonded** layer — particles, virtual
+sites, constraints, bonds, dummy-atom anchor restraints, angles, and
+dihedrals — and leaves the **nonbonded** layer to its subclasses (basic,
+water-swap, water-ion-swap), which differ in how they treat the swap region.
+
+Bonded forces and dummy stereochemistry are implemented and tested:
+
+- **Bonds** — classified into ``h`` (harmonic), ``c_h`` (A→B interpolated via
+  ``lambda_bonds``), and ``c_s`` (soft-core for broken bonds, via
+  ``lambda_bonds_A`` / ``lambda_bonds_B``).
+- **Dummy anchoring** — ``_prepare_dummy_anchoring_point`` builds
+  ``anchor_info`` and ``dummy_restraint``; for each dummy it keeps the
+  existing angle or adds 1 angle + 1 harmonic improper to preserve SP3 / SP2
+  stereochemistry (True-Dummy separability in the partition function).
+- **Angles** — env-env-env → ``HarmonicAngleForce``; everything else → a
+  ``CustomAngleForce`` interpolating A→B (``lambda_angle``), plus separate
+  ``CustomAngleForce_A`` / ``_B`` for broken-bond angles.
+- **Dihedrals** — every proper / improper term is classified by
+  :class:`ProperDihedralInfo` / :class:`ImproperDihedralInfo` into the groups
+  ``env`` / ``normal`` / ``break`` / ``anchor`` / ``uu`` and routed into five
+  torsion forces (``lambda_dihedral`` / ``lambda_dihedral_A`` /
+  ``lambda_dihedral_B``).  Rotatable ``uu`` proper dihedrals are scaled by
+  ``dummy_dihe_scaling``; dummy-stereo restraints use a harmonic
+  minimum-image improper.
+
+Nonbonded forces (``_prepare_nonbonded``) are **not yet implemented** — the
+subclass bodies are currently ``pass``.  ``k_rest2`` / ``k_rest2_sqrt`` are
+also not yet wired into the hybrid bonded expressions.
 
 .. autoclass:: HybridRest2TopologyFactoryBase
    :members:
    :undoc-members:
    :show-inheritance:
+
+Hybrid term info classes
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+The hybrid factory classifies each end-state bonded term into a *group* that
+decides which OpenMM force receives it and how its force constant is
+interpolated between states.  These frozen dataclasses hold that
+classification; they live in ``grandfep.hybrid_topology.hybrid_factory``.
+
+.. autoclass:: AnchorInfo
+   :members:
+   :undoc-members:
+   :noindex:
+
+.. autoclass:: DihedralInfoBase
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :noindex:
+
+.. autoclass:: ProperDihedralInfo
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :noindex:
+
+.. autoclass:: ImproperDihedralInfo
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :noindex:
 
 Helper functions
 ~~~~~~~~~~~~~~~~

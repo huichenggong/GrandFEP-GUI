@@ -191,35 +191,35 @@ class DihedralInfoBase:
     ------------------------
     ``group`` determines which OpenMM force receives this entry.
 
-    +------------+-----------------------------+---------------------------------------------------+
-    | group      | Target force                | k0 / k1 rule                                      |
-    +============+=============================+===================================================+
-    | ``"env"``  | PeriodicTorsionForce        | Constant k; all 4 atoms are env.  Parameters      |
-    |            |                             | identical in A and B — no lambda needed.          |
-    +------------+-----------------------------+---------------------------------------------------+
-    | ``"normal"``| CustomTorsionForce         | A-list: k0=k, k1=0.  B-list: k0=0, k1=k.        |
-    |            |                             | All atoms core/env (≥1 core); not broken.         |
-    +------------+-----------------------------+---------------------------------------------------+
-    | ``"break"``| CustomTorsionForce_A or _B  | k scales with ``lambda_dihedral_A/B``.            |
-    +------------+-----------------------------+---------------------------------------------------+
-    | ``"anchor"``| CustomTorsionForce         | A-list: k0=k, k1=0 (removed in dummy state B).   |
-    |            |                             | B-list: k0=0, k1=k (removed in dummy state A).   |
-    |            |                             | 1u or 2u pattern (permitted positions only).      |
-    +------------+-----------------------------+---------------------------------------------------+
-    | ``"uu"``   | CustomTorsionForce          | A-list: k0=k, k1 = ``dummy_dihe_scaling*k``       |
-    |            |                             |   (rotatable) or k (non-rotatable).               |
-    |            |                             | B-list: k0 = ``dummy_dihe_scaling*k`` (rotatable) |
-    |            |                             |   or k (non-rotatable), k1=k.                     |
-    |            |                             | 3u or 4u pattern; kept in dummy state because the |
-    |            |                             | coupling integrates to a partition-function        |
-    |            |                             | constant (I₀(βk)).                                |
-    +------------+-----------------------------+---------------------------------------------------+
-    | ``"dummy"``| CustomTorsionForce_harmonic | A-list: k0=k, k1=0 (unique_B restraint).          |
-    |            |                             | B-list: k0=0, k1=k (unique_A restraint).          |
-    |            |                             | Harmonic form; ``periodicity`` set to 0.          |
-    |            |                             | Not assigned by ``classify()``; constructed        |
-    |            |                             | directly by ``_prepare_dummy_anchoring_point``.   |
-    +------------+-----------------------------+---------------------------------------------------+
+    +-------------+-----------------------------+---------------------------------------------------+
+    | group       | Target force                | k0 / k1 rule                                      |
+    +=============+=============================+===================================================+
+    | ``"env"``   | PeriodicTorsionForce        | Constant k; all 4 atoms are env.  Parameters      |
+    |             |                             | identical in A and B — no lambda needed.          |
+    +-------------+-----------------------------+---------------------------------------------------+
+    | ``"normal"``| CustomTorsionForce          | A-list: k0=k, k1=0.  B-list: k0=0, k1=k.          |
+    |             |                             | All atoms core/env (≥1 core); not broken.         |
+    +-------------+-----------------------------+---------------------------------------------------+
+    | ``"break"`` | CustomTorsionForce_A or _B  | k scales with ``lambda_dihedral_A/B``.            |
+    +-------------+-----------------------------+---------------------------------------------------+
+    | ``"anchor"``| CustomTorsionForce          | A-list: k0=k, k1=0 (removed in dummy state B).    |
+    |             |                             | B-list: k0=0, k1=k (removed in dummy state A).    |
+    |             |                             | 1u or 2u pattern (permitted positions only).      |
+    +-------------+-----------------------------+---------------------------------------------------+
+    | ``"uu"``    | CustomTorsionForce          | A-list: k0=k, k1 = ``dummy_dihe_scaling*k``       |
+    |             |                             | (rotatable) or k (non-rotatable).                 |
+    |             |                             | B-list: k0 = ``dummy_dihe_scaling*k`` (rotatable) |
+    |             |                             | or k (non-rotatable), k1=k.                       |
+    |             |                             | 3u or 4u pattern; kept in dummy state because the |
+    |             |                             | coupling integrates to a partition-function       |
+    |             |                             | constant (I₀(βk)).                                |
+    +-------------+-----------------------------+---------------------------------------------------+
+    | ``"dummy"`` | CustomTorsionForce_harmonic | A-list: k0=k, k1=0 (unique_B restraint).          |
+    |             |                             | B-list: k0=0, k1=k (unique_A restraint).          |
+    |             |                             | Harmonic form; ``periodicity`` set to 0.          |
+    |             |                             | Not assigned by ``classify()``; constructed       |
+    |             |                             | directly by ``_prepare_dummy_anchoring_point``.   |
+    +-------------+-----------------------------+---------------------------------------------------+
 
     ``"anchor"`` and ``"normal"`` follow the same k0/k1 rule; the distinction
     is semantic (whether unique atoms are present) and aids debugging.
@@ -243,6 +243,7 @@ class DihedralInfoBase:
     k            : Raw force constant (kJ/mol) from this state.
     group        : One of ``"normal"``, ``"break"``, ``"anchor"``, ``"uu"``,
                    ``"dummy"``.
+                   
     """
     atoms:       tuple[int, int, int, int]
     periodicity: int

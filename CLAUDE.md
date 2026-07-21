@@ -14,7 +14,7 @@ GrandFEP-GUI is a reconstruction of the [GrandFEP](https://github.com/deGrootLab
 ## Architecture
 
 **`src/grandfep/`** — installable Python library, no GUI dependencies:
-- `src/grandfep/hybrid_topology/` — **active development**. Core data model (`molecules.py`: `Atom`, `Residue`, `BondPotential`, `AnglePotential`, `DihedralPotential`, `NonbondedExceptionPotential`, `VirtualSiteInfo`, `MolecularSystem`, and `TermTable` subclasses) and topology factory classes (`hybrid_factory.py`: `Rest2TopologyFactory`, `HybridIndexMapping`, `HybridRest2TopologyFactoryBase`).
+- `src/grandfep/hybrid_topology/` — **active development**. Core data model (`molecules.py`: `Atom`, `Residue`, `BondPotential`, `AnglePotential`, `DihedralPotential`, `NonbondedExceptionPotential`, `VirtualSiteInfo`, `MolecularSystem`, and `TermTable` subclasses) and topology factory classes (`hybrid_factory.py`: `Rest2TopologyFactory`, `HybridIndexMapping`, `HybridRest2TopologyFactoryBase`, plus the `AnchorInfo` / `DihedralInfoBase` / `ProperDihedralInfo` / `ImproperDihedralInfo` term-info classes).
 - `src/grandfep/utils/` — I/O utilities (`io.py`: `load_amber_sys` for loading AMBER inpcrd/prmtop files).
 - `src/grandfep/samplers/` — placeholder for FEP sampler classes (not yet implemented).
 
@@ -107,6 +107,8 @@ atoms in state A.
 - `atom_identity: dict[int, str]` — maps each hybrid index to one of `"core"`, `"unique_A"`, `"unique_B"`, `"env"`
 - `broken_bonds_A`, `broken_bonds_B` — bonds present in only one end-state (hybrid-index pairs)
 - `hybrid_top: openmm.app.Topology` — the merged hybrid topology
+- `topologyA`, `topologyB` — the original end-state `openmm.app.Topology` objects (stored for downstream use, e.g. building a `MolecularSystem` per state)
+- `hybridization: dict[str, dict[int, list]]` — per-state (`"A"`/`"B"`) hybridization strings for atoms in perturbed residues (from the `hybridization_moli`/`hybridization_molj` mapping keys); drives SP3/SP2 stereo handling for dummy atoms
 
 ### `HybridRest2TopologyFactoryBase` (`hybrid_factory.py`)
 Base class for building hybrid REST2 RBFE systems. Takes two end-state systems, positions, rotatable bond sets, and a `HybridIndexMapping`.
@@ -124,11 +126,26 @@ Base class for building hybrid REST2 RBFE systems. Takes two end-state systems, 
 0.5 * lambda * k * (r - r0)^2 / (1 + soft_bond_alpha * (1 - lambda) * (r - r0)^2)
 ```
 
-**Anchor points** (`_prepare_dummy_anchoring_point`): For unique (dummy) atoms, finds core/env anchor atoms that are bonded or constrained to them. Populates `anchoring_points_A/B` and `anchor_connectivity_A/B`, which drive angle and improper potentials for dummy atoms to maintain stereo geometry.
+**Anchor points** (`_prepare_dummy_anchoring_point`): For unique (dummy) atoms, finds core/env anchor atoms bonded or constrained to them and summarizes each anchor's connectivity + hybridization. Populates `anchor_info: dict[int, AnchorInfo]` (one entry per anchor atom) and `dummy_restraint` (`{"unique_A": {...}, "unique_B": {...}}`, each mapping dummy hybrid index → `{"angles": [...], "impropers": [...]}`). Per dummy, it either keeps the existing angle (when the anchor has only 1 real reference atom) or adds 1 angle + 1 harmonic improper to preserve SP3/SP2 stereochemistry — this is what makes dummies separable in the partition function (True Dummy).
 
-**Angles and dihedrals**: `_prepare_angle()` and `_prepare_dihe()` are stubs (not yet implemented).
+**Angles** (`_prepare_angle`): env-env-env → `HarmonicAngleForce`; everything else → a `CustomAngleForce` interpolating A→B via `lambda_angle` (per-angle `theta0, k0, theta1, k1`). `unique_A`-(env/core) angles get `k1=0` (off in B); `unique_B`-(env/core) get `k0=0` (off in A); angles with ≥2 unique atoms keep `k0=k1`; core/env angles interpolate A→B. Two extra `CustomAngleForce_A`/`_B` (via `lambda_angle_A`/`lambda_angle_B`) hold broken-bond angles. Dummy-restraint angles from `_prepare_dummy_anchoring_point` are added with the complementary k so they turn on in the dummy state.
 
-**Subclasses** (stubs, not yet implemented):
+**Dihedrals** (`_prepare_dihe`): every proper and improper term is classified by `ProperDihedralInfo`/`ImproperDihedralInfo` (frozen dataclasses with a `.classify()` classmethod) into a group, then routed to one of five torsion forces:
+
+| Group | Force | k0/k1 rule |
+|-------|-------|------------|
+| `env` | `PeriodicTorsionForce` | constant k; all-env, identical in A and B |
+| `normal` | `CustomTorsionForce` (`lambda_dihedral`) | A: k0=k,k1=0; B: k0=0,k1=k (≥1 core, not broken) |
+| `break` | `CustomTorsionForce_A`/`_B` (`lambda_dihedral_A`/`_B`) | scales with the break-side lambda |
+| `anchor` | `CustomTorsionForce` (`lambda_dihedral`) | A: k0=k,k1=0; B: k0=0,k1=k (1u/2u permitted patterns) |
+| `uu` | `CustomTorsionForce` (`lambda_dihedral`) | rotatable proper: scaled by `dummy_dihe_scaling`; else k. Kept in dummy state — integrates to a partition-function constant I₀(βk) |
+| `dummy` | `CustomTorsionForce_harmonic` (`lambda_dihedral`) | harmonic minimum-image improper from `_prepare_dummy_anchoring_point`; unique_A turns on at λ→1, unique_B at λ→0 |
+
+Classification collapses atom identity to `r` (core/env) or `u` (unique_A/B) and looks up a LUT; patterns that violate True-Dummy separability (e.g. a dummy group anchored to two distinct real fragments) raise `ValueError`. Classified terms are stored in `hybrid_proper_dihedral_info[(min(at1,at2),max(at1,at2))]["A"/"B"]` and `hybrid_improper_dihedral_info[hub]["A"/"B"]`.
+
+**Note**: REST2 scaling (`k_rest2`/`k_rest2_sqrt`) is not yet wired into the hybrid bond/angle/dihedral force expressions — only `Rest2TopologyFactory` applies it.
+
+**Subclasses** — exist and call `super().__init__()` (so the bonded layer is built), then call `_prepare_nonbonded()`, which is still `pass` in all three (nonbonded not yet implemented):
 - `HybridRest2TopologyFactory` — basic RBFE
 - `HybridRest2TopologyFactoryWaterSwap` — RBFE with water swap
 - `HybridRest2TopologyFactoryWaterIonSwap` — RBFE with water + ion swap
@@ -138,6 +155,8 @@ Base class for building hybrid REST2 RBFE systems. Takes two end-state systems, 
 - `sp3_stereo_solver()` — computes the A-C-A-B improper dihedral angle for an SP3 center given A-C-A and B-C-A angles
 
 ## Nonbonded Force
+
+> **Status:** Design spec only — **not yet implemented**. The hybrid subclasses' `_prepare_nonbonded` are `pass`. The tables below describe the planned vdw/Coulomb treatment for the hybrid system.
 
 ### vdw
 For the vdw interaction, we set a **NonbondedForce** and a **CustomNonbondedForce**. All of the interactions that need soft-core goes to 
